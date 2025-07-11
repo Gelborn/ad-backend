@@ -1,145 +1,142 @@
-# 🍔 Backend Arcos Dourados – Supabase MVP
+# 🍔 Backend Arcos Dourados – Supabase MVP
 
-**Objetivo:** facilitar a criação, manutenção e deploy rápidos do backend (Supabase) para a plataforma de doações.
+**Objetivo**
+: Colocar no ar, de forma rápida e enxuta, o backend da plataforma de doações usando apenas o ecossistema **Supabase** (Postgres + Auth + Storage + Edge Functions) e CI/CD no GitHub.
 
 ---
 
 ## 📁 Estrutura do repositório
 
 ```text
-backend/
-├─ supabase/
-│  ├─ config.toml                # liga CLI ao project‑ref (preencher depois)
-│  ├─ migrations/
-│  │   └─ 20250711_init.sql      # schema inicial – editar
-│  ├─ seed/
-│  │   ├─ seed.sql               # dados fictícios p/ dev
-│  │   └─ osc_seed.csv           # lista inicial de OSCs (lat/lng)
-│  └─ functions/                 # Edge Functions (Deno / TypeScript)
-│     ├─ geocode_address/
-│     │   ├─ index.ts            # CEP ➜ lat/lng (ViaCEP + Nominatim)
-│     │   └─ deno.json
-│     ├─ liberate_donation/
-│     │   ├─ index.ts            # escolhe OSC + cria doação
-│     │   └─ deno.json
-│     ├─ pickup_donation/
-│     │   ├─ index.ts            # valida código, muda status, recibo
-│     │   └─ deno.json
-│     └─ send_notifications/
-│         ├─ index.ts            # WhatsApp / e-mail
-│         └─ deno.json
-├─ .github/
-│  └─ workflows/
-│     └─ deploy.yml              # CI/CD – migrations + functions
-├─ .env.example                  # variáveis (Supabase URL, keys, APIs)
-├─ .gitignore                    # node_modules, .env, supabase/.temp
-└─ README.md                     # este arquivo
+supabase/                 # pasta gerenciada pela Supabase CLI
+├─ config.toml            # criado automaticamente pelo `supabase link`
+├─ migrations/            # scripts SQL versionados
+│   └─ 20250711_init.sql  # schema inicial (edite)
+├─ seed/                  # dados fake para desenvolvimento
+│   ├─ seed.sql
+│   └─ osc_seed.csv
+└─ functions/             # Edge Functions (Deno + TypeScript)
+    ├─ geocode_address/
+    │   └─ index.ts
+    ├─ liberate_donation/
+    │   └─ index.ts
+    ├─ pickup_donation/
+    │   └─ index.ts
+    └─ send_notifications/
+        └─ index.ts
+
+.github/
+└─ workflows/
+   └─ deploy.yml          # pipeline de deploy
+
+.env.example              # chaves e URLs de referência
+.gitignore                # ignora node_modules, .env etc.
+README.md                 # este arquivo
 ```
 
-> **Tip:** use `supabase start` para rodar Postgres + API locais.
+> **Dica:** `supabase start` sobe Postgres + APIs em Docker para dev offline.
 
 ---
 
-## 🛠️ Passos de configuração rápida
+## 🛠️ Passo‑a‑passo rápido (local)
 
-1. **Clonar & instalar CLI**
+```bash
+# 1️⃣  Clone do repositório
+$ git clone git@github.com:Gelborn/ad-backend.git && cd ad-backend
 
-   ```bash
-   git clone <repo-url> && cd backend
-   brew install supabase/tap/supabase   # macOS (ou use `npx supabase --help` sem instalar)
-   supabase link --project-ref YOUR_REF   # deixar vazio por enquanto
-   cp .env.example .env                   # preencher chaves
-   ```
-2. **Rodar local**
+# 2️⃣  Instalar a CLI (escolha UMA opção)
+$ brew install supabase/tap/supabase     # macOS
+# ou
+$ npx supabase --help                    # zero‑install
 
-   ```bash
-   supabase start     # Postgres local + Studio
-   supabase db reset  # aplica migrations + seed
-   ```
-3. **Criar nova migration**
+# 3️⃣  Vínculo com o projeto (pule enquanto estiver só em dev local)
+$ supabase link --project-ref <PROJECT_REF>
 
-   ```bash
-   supabase migration new add_table_x
-   # editar arquivo gerado em supabase/migrations/
-   supabase db push   # aplica + gera diff
-   ```
-4. **Nova Edge Function**
+# 4️⃣  Ambiente de desenvolvimento
+$ supabase start        # containers: Postgres, Auth, Storage, Studio
+$ supabase db reset     # aplica migrations + seed.sql
+```
 
-   ```bash
-   supabase functions new my_function --no-open
-   supabase functions deploy my_function
-   ```
+### Criar coisas novas
+
+```bash
+# Nova migration
+supabase migration new add_table_x
+# (edite o SQL gerado)
+supabase db push        # aplica local + grava histórico
+
+# Nova Edge Function
+supabase functions new my_function --no-open
+supabase functions serve              # hot‑reload local
+```
 
 ---
 
-## 🚀 Deploy (GitHub Actions)
+## 🚀 Deploy automático (GitHub Actions)
 
-*Push na branch ****main**** ➜* workflow executa:
+O workflow **.github/workflows/deploy.yml** roda a cada *push* na branch **main**:
 
 ```yaml
 name: Deploy Supabase
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: supabase/setup-cli@v1
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
         with:
           version: latest
 
-      # 1️⃣ Vincula o projeto usando token/ref (não fica salvo no repositório)
-            - name: Supabase link
+      - name: Supabase link
         run: supabase link --project-ref ${{ secrets.SUPABASE_REF }}
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
-      # 2️⃣ Aplica migrations
       - name: Push migrations
         run: supabase db push
-        run: supabase db push
 
-      # 3️⃣ Deploy das Edge Functions
       - name: Deploy functions
         run: supabase functions deploy --verify-jwt
-``
+```
 
-> Configure `SUPABASE_ACCESS_TOKEN` e `SUPABASE_REF` em *Settings → Secrets*.
+1. Adicione `SUPABASE_ACCESS_TOKEN` e `SUPABASE_REF` em **Settings → Secrets → Actions**.
+2. Ao fazer `git push`, o workflow aplica as migrations e publica/atualiza todas as Edge Functions.
 
 ---
 
 ## 🔐 Convenções de segurança
 
-| Key                         | Contexto de uso       | Onde fica                            |
-| --------------------------- | --------------------- | ------------------------------------ |
-| `anon`                      | browser / front‑end   | `.env.example` (exposto)             |
-| `service_role`              | Edge Functions, CI/CD | **NUNCA** commit; colocar em secrets |
-| Outras APIs (WhatsApp etc.) | Edge Functions        | secrets                              |
+| Chave / Token           | Uso                 | Onde armazenar                      |
+| ----------------------- | ------------------- | ----------------------------------- |
+| `anon`                  | Front‑end / SDK     | `.env.example` (pode ficar público) |
+| `service_role`          | Edge Functions / CI | **NUNCA** em código; use secrets    |
+| Tokens de APIs externas | Edge Functions      | secrets                             |
 
-Policies RLS ficam versionadas nos scripts SQL.
-
----
-
-## 📚 Referências
-
-- [Supabase Docs](https://supabase.com/docs)
-- [earthdistance / cube](https://postgis.net/docs/)
-- [ViaCEP](https://viacep.com.br) + [Nominatim](https://nominatim.org)
+*Todas as políticas **RLS** ficam versionadas em `migrations/*.sql`.*
 
 ---
 
-## ✍️ Próximos arquivos a preencher
+## 📚 Referências úteis
 
-- `functions/*/index.ts` – lógica
-- `migrations/` subsequentes
-- `deploy.yml` – copiar template completo do roteiro
-- `seed/` – gerar CSVs para testes
+* [Supabase Docs](https://supabase.com/docs)
+* [Extensões `cube` / `earthdistance`](https://postgis.net/docs/)
+* [ViaCEP](https://viacep.com.br) · [Nominatim](https://nominatim.org)
 
-Feel free to abrir issues ou PRs para qualquer modificação.
+---
 
-```
+## 🚧 Próximos passos
+
+* Implementar lógica em `functions/*/index.ts`.
+* Criar novas migrations conforme o modelo evoluir.
+* Popular `seed/` com dados de teste realistas.
+* Ajustar `deploy.yml` se precisar de etapas extras (testes, lint, etc.).
+
+Sinta‑se à vontade para abrir *issues* ou enviar *PRs*.

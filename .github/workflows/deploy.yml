@@ -2,37 +2,32 @@ name: Deploy Supabase
 
 on:
   push:
-    branches: [main]   # dispara somente na branch main
+    branches: [main]   # roda apenas na branch main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
-    # 👉 Define que TODOS os comandos `run:` herdarão esse diretório
-    defaults:
-      run:
-        working-directory: backend   # <-- ajuste se mudou a pasta
-
     steps:
-      # 1. Checkout do código
+      # 1️⃣ Checkout do código
       - uses: actions/checkout@v4
 
-      # 2. Instala a Supabase CLI (binário)
+      # 2️⃣ Instala a Supabase CLI
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest            # fixe em x.y.z se quiser travar
+          version: latest
 
-      # 3. Linka o projeto (cria backend/supabase/config.toml com project_id)
+      # 3️⃣ Linka o projeto (cria supabase/config.toml com project_id)
       - name: Supabase link
         run: supabase link --project-ref ${{ secrets.SUPABASE_REF }}
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
-      # 4. Aplica migrations pendentes
+      # 4️⃣ Aplica migrations pendentes
       - name: Push migrations
         run: supabase db push
 
-      # 5. Deploy (ou atualiza) todas as Edge Functions
+      # 5️⃣ Deploy/atualiza todas as Edge Functions
       - name: Deploy functions
         run: supabase functions deploy --verify-jwt
