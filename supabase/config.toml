@@ -1,0 +1,3 @@
+# Supabase CLI project configuration
+project_id = ""
+# You can set local dev env variables here
