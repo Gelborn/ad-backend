@@ -2,33 +2,32 @@ name: Deploy Supabase
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # ️⬇️  Clona o repositório
+      # 1️⃣ Checkout do código
       - uses: actions/checkout@v4
 
-      # 🛠️  Instala a CLI (binário) na runner
+      # 2️⃣ Instala a Supabase CLI
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: latest          # pode travar em uma versão se preferir
 
-      # 🔗  Conecta a runner ao seu projeto Supabase (apenas para este job)
+      # 3️⃣ Vincula a runner ao seu projeto (token via env var)
       - name: Supabase link
-        run: >
-          supabase link
-          --project-ref ${{ secrets.SUPABASE_REF }}
-          --access-token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase link --project-ref ${{ secrets.SUPABASE_REF }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
-      # 🗄️  Aplica todas as migrations pendentes
+      # 4️⃣ Aplica migrations pendentes
       - name: Push migrations
         run: supabase db push
 
-      # ⚙️  Publica (ou atualiza) todas as Edge Functions
+      # 5️⃣ Deploy/atualiza todas as Edge Functions
       - name: Deploy functions
         run: supabase functions deploy --verify-jwt
