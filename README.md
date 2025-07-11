@@ -1,4 +1,4 @@
-# 🍃 Donation Backend – Supabase MVP
+# 🍔 Backend Arcos Dourados – Supabase MVP
 
 **Objetivo:** facilitar a criação, manutenção e deploy rápidos do backend (Supabase) para a plataforma de doações.
 
@@ -43,24 +43,28 @@ backend/
 ## 🛠️ Passos de configuração rápida
 
 1. **Clonar & instalar CLI**
+
    ```bash
    git clone <repo-url> && cd backend
-   npm i -g supabase
+   brew install supabase/tap/supabase   # macOS (ou use `npx supabase --help` sem instalar)
    supabase link --project-ref YOUR_REF   # deixar vazio por enquanto
    cp .env.example .env                   # preencher chaves
    ```
 2. **Rodar local**
+
    ```bash
    supabase start     # Postgres local + Studio
    supabase db reset  # aplica migrations + seed
    ```
 3. **Criar nova migration**
+
    ```bash
    supabase migration new add_table_x
    # editar arquivo gerado em supabase/migrations/
    supabase db push   # aplica + gera diff
    ```
 4. **Nova Edge Function**
+
    ```bash
    supabase functions new my_function --no-open
    supabase functions deploy my_function
@@ -70,7 +74,7 @@ backend/
 
 ## 🚀 Deploy (GitHub Actions)
 
-*Push na branch **main** ➜* workflow executa:
+*Push na branch ****main**** ➜* workflow executa:
 
 ```yaml
 supabase db push --project-ref ${{ secrets.SUPABASE_REF }}
@@ -95,17 +99,17 @@ Policies RLS ficam versionadas nos scripts SQL.
 
 ## 📚 Referências
 
-- [Supabase Docs](https://supabase.com/docs)
-- [earthdistance / cube](https://postgis.net/docs/)
-- [ViaCEP](https://viacep.com.br) + [Nominatim](https://nominatim.org)
+* [Supabase Docs](https://supabase.com/docs)
+* [earthdistance / cube](https://postgis.net/docs/)
+* [ViaCEP](https://viacep.com.br) + [Nominatim](https://nominatim.org)
 
 ---
 
 ## ✍️ Próximos arquivos a preencher
 
-- `functions/*/index.ts` – lógica
-- `migrations/` subsequentes
-- `deploy.yml` – copiar template completo do roteiro
-- `seed/` – gerar CSVs para testes
+* `functions/*/index.ts` – lógica
+* `migrations/` subsequentes
+* `deploy.yml` – copiar template completo do roteiro
+* `seed/` – gerar CSVs para testes
 
 Feel free to abrir issues ou PRs para qualquer modificação.
