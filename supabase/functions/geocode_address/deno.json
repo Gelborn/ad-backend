@@ -1,5 +1,5 @@
 {
-  "importMap": "import_map.json",
+  "importMap": "../import_map.json",
   "tasks": {
     "start": "deno run --allow-net index.ts"
   }
