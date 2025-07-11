@@ -77,9 +77,34 @@ backend/
 *Push na branch ****main**** ➜* workflow executa:
 
 ```yaml
-supabase db push --project-ref ${{ secrets.SUPABASE_REF }}
-supabase functions deploy --project-ref ${{ secrets.SUPABASE_REF }}
-```
+name: Deploy Supabase
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # 1️⃣ Vincula o projeto usando token/ref (não fica salvo no repositório)
+      - name: Supabase link
+        run: supabase link --project-ref ${{ secrets.SUPABASE_REF }} --access-token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      # 2️⃣ Aplica migrations
+      - name: Push migrations
+        run: supabase db push
+
+      # 3️⃣ Deploy das Edge Functions
+      - name: Deploy functions
+        run: supabase functions deploy --verify-jwt
+``
 
 > Configure `SUPABASE_ACCESS_TOKEN` e `SUPABASE_REF` em *Settings → Secrets*.
 
@@ -99,17 +124,19 @@ Policies RLS ficam versionadas nos scripts SQL.
 
 ## 📚 Referências
 
-* [Supabase Docs](https://supabase.com/docs)
-* [earthdistance / cube](https://postgis.net/docs/)
-* [ViaCEP](https://viacep.com.br) + [Nominatim](https://nominatim.org)
+- [Supabase Docs](https://supabase.com/docs)
+- [earthdistance / cube](https://postgis.net/docs/)
+- [ViaCEP](https://viacep.com.br) + [Nominatim](https://nominatim.org)
 
 ---
 
 ## ✍️ Próximos arquivos a preencher
 
-* `functions/*/index.ts` – lógica
-* `migrations/` subsequentes
-* `deploy.yml` – copiar template completo do roteiro
-* `seed/` – gerar CSVs para testes
+- `functions/*/index.ts` – lógica
+- `migrations/` subsequentes
+- `deploy.yml` – copiar template completo do roteiro
+- `seed/` – gerar CSVs para testes
 
 Feel free to abrir issues ou PRs para qualquer modificação.
+
+```
