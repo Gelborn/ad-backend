@@ -2,32 +2,35 @@ name: Deploy Supabase
 
 on:
   push:
-    branches: [main]   # roda apenas na branch main
+    branches: [main]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout do código
       - uses: actions/checkout@v4
 
-      # 2️⃣ Instala a Supabase CLI
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
           version: latest
 
-      # 3️⃣ Linka o projeto (cria supabase/config.toml com project_id)
+      # 🔗 Linka projeto — passa token e senha via env
       - name: Supabase link
-        run: supabase link --project-ref ${{ secrets.SUPABASE_REF }}
+        run: |
+          supabase link --project-ref ${{ secrets.SUPABASE_REF }} \
+                        --password $SUPABASE_DB_PASSWORD
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
 
-      # 4️⃣ Aplica migrations pendentes
+      # 📦 Aplica migrations
       - name: Push migrations
-        run: supabase db push
+        run: supabase db push --password $SUPABASE_DB_PASSWORD
+        env:
+          SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
 
-      # 5️⃣ Deploy/atualiza todas as Edge Functions
+      # 🚀 Deploy das Edge Functions
       - name: Deploy functions
         run: supabase functions deploy --verify-jwt
