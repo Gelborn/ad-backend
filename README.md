@@ -94,11 +94,14 @@ jobs:
           version: latest
 
       # 1️⃣ Vincula o projeto usando token/ref (não fica salvo no repositório)
-      - name: Supabase link
-        run: supabase link --project-ref ${{ secrets.SUPABASE_REF }} --access-token ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+            - name: Supabase link
+        run: supabase link --project-ref ${{ secrets.SUPABASE_REF }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
       # 2️⃣ Aplica migrations
       - name: Push migrations
+        run: supabase db push
         run: supabase db push
 
       # 3️⃣ Deploy das Edge Functions
