@@ -4,7 +4,20 @@ node_modules/
 supabase/.temp
 supabase/.output
 
-# MacOS
-#  MacOS specific files
-#  refer to https://support.apple.com/en-us/101247
+# Supabase local artefacts
+supabase/.branches/
+supabase/.temp/
+
+# VSCode workspace settings dentro de functions
+supabase/functions/**/.vscode/
+
+# Node modules (se houver pacotes JS/TS no repo)
+**/node_modules/
+
+# Arquivos de ambiente
+.env
+.env.local
+.env.*.local
+
+# Mac/Linux
 .DS_Store

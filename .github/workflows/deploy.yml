@@ -7,31 +7,44 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
-    # 🔐 Secrets injetados para TODOS os steps
     env:
+      # Supabase CLI lê isso automaticamente
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_REF:          ${{ secrets.SUPABASE_REF }}
 
     steps:
-      # 1️⃣ Checkout
+      # 1) Checkout
       - uses: actions/checkout@v4
 
-      # 2️⃣ Instala a CLI
+      # 2) Instala Supabase CLI
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
           version: latest
 
-      # 3️⃣ Linka o projeto (gera supabase/config.toml)
+      # 3) Linka o projeto
       - name: Supabase link
         run: supabase link --project-ref $SUPABASE_REF --password $SUPABASE_DB_PASSWORD
 
-      # 4️⃣ Aplica migrations
+      # 4) Aplica migrations
       - name: Push migrations
         run: supabase db push --password $SUPABASE_DB_PASSWORD
 
-      # 5️⃣ Deploy/atualiza todas as Edge Functions
-      - name: Deploy functions
-        run: supabase functions deploy
+      # 5) Deploy das funções privadas (exigem JWT)
+      - name: Deploy private functions
+        run: |
+          supabase functions deploy \
+            liberate_donation \
+            release_donation \
+            pickup_donation \
+            send_notifications
+
+      # 6) Deploy das funções públicas (sem checagem JWT)
+      - name: Deploy public functions
+        run: |
+          supabase functions deploy \
+            geocode_address \
+            accept_donation \
+            deny_donation \
+            --no-verify-jwt
