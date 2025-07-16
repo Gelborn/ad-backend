@@ -2,46 +2,44 @@ name: Deploy Supabase
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      # Supabase CLI lê isso automaticamente
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_REF:          ${{ secrets.SUPABASE_REF }}
 
     steps:
-      # 1) Checkout
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      # 2) Instala Supabase CLI
-      - name: Setup Supabase CLI
+      - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
         with:
           version: latest
 
-      # 3) Linka o projeto
-      - name: Supabase link
-        run: supabase link --project-ref $SUPABASE_REF --password $SUPABASE_DB_PASSWORD
+      - name: Link Supabase project
+        run: |
+          supabase link \
+            --project-ref "$SUPABASE_REF" \
+            --password "$SUPABASE_DB_PASSWORD"
 
-      # 4) Aplica migrations
-      - name: Push migrations
-        run: supabase db push --password $SUPABASE_DB_PASSWORD
+      - name: Migrate database
+        run: supabase db push
 
-      # 5) Deploy das funções privadas (exigem JWT)
-      - name: Deploy private functions
+      - name: Deploy private Edge Functions
         run: |
           supabase functions deploy \
             liberate_donation \
+            register_restaurant \
             release_donation \
-            pickup_donation \
             send_notifications
 
-      # 6) Deploy das funções públicas (sem checagem JWT)
-      - name: Deploy public functions
+      - name: Deploy public Edge Functions
         run: |
           supabase functions deploy \
             geocode_address \
