@@ -1,142 +1,191 @@
-# 🍔 Backend Arcos Dourados – Supabase MVP
+# 🍔 Backend Arcos Dourados – Supabase MVP
 
-**Objetivo**
-: Colocar no ar, de forma rápida e enxuta, o backend da plataforma de doações usando apenas o ecossistema **Supabase** (Postgres + Auth + Storage + Edge Functions) e CI/CD no GitHub.
+> Backend enxuto para a plataforma de doações Arcos Dourados, usando Supabase (Postgres + Auth + Storage + Edge Functions) com CI/CD via GitHub Actions.
 
 ---
 
-## 📁 Estrutura do repositório
+## 📑 Sumário
 
-```text
-supabase/                 # pasta gerenciada pela Supabase CLI
-├─ config.toml            # criado automaticamente pelo `supabase link`
-├─ migrations/            # scripts SQL versionados
-│   └─ 20250711_init.sql  # schema inicial (edite)
-├─ seed/                  # dados fake para desenvolvimento
-│   ├─ seed.sql
-│   └─ osc_seed.csv
-└─ functions/             # Edge Functions (Deno + TypeScript)
-    ├─ geocode_address/
-    │   └─ index.ts
-    ├─ liberate_donation/
-    │   └─ index.ts
-    ├─ pickup_donation/
-    │   └─ index.ts
-    └─ send_notifications/
-        └─ index.ts
+* [Tecnologias](#tecnologias)
+* [Pré-requisitos](#pré-requisitos)
+* [Variáveis de Ambiente](#variáveis-de-ambiente)
+* [Instalação & Configuração](#instalação--configuração)
+* [Migrações de Banco de Dados](#migrações-de-banco-de-dados)
+* [Seed de Dados](#seed-de-dados)
+* [Functions (Edge)](#functions-edge)
 
-.github/
-└─ workflows/
-   └─ deploy.yml          # pipeline de deploy
+  * [Funções Privadas (JWT)](#funções-privadas-jwt)
+  * [Funções Públicas (sem JWT)](#funções-públicas-sem-jwt)
+* [Desenvolvimento Local](#desenvolvimento-local)
+* [CI/CD (GitHub Actions)](#cicd-github-actions)
+* [Contribuição](#contribuição)
 
-.env.example              # chaves e URLs de referência
-.gitignore                # ignora node_modules, .env etc.
-README.md                 # este arquivo
+---
+
+## 🛠 Tecnologias
+
+* **Supabase** (PostgreSQL, Auth, Storage, Edge Functions)
+* **Deno / Sift** para execução das funções (TypeScript)
+* **GitHub Actions** via `supabase/setup-cli` para CI/CD
+
+---
+
+## ⚙️ Pré-requisitos
+
+* [Supabase CLI](https://supabase.com/docs/guides/cli) (v1+)
+* [Deno](https://deno.land/) (para lint/build local das Edge Functions)
+* Docker & Docker Compose (se quiser emular Supabase local com `supabase start`)
+
+---
+
+## 🗝 Variáveis de Ambiente
+
+Crie um arquivo `.env` na raiz do projeto com:
+
+```dotenv
+# Supabase
+SUPABASE_URL=…  
+SUPABASE_ANON_KEY=…  
+SUPABASE_SERVICE_ROLE_KEY=…  
+SUPABASE_DB_PASSWORD=…  
+SUPABASE_REF=…           # project ref (ex: abcdef123456)
+SUPABASE_ACCESS_TOKEN=…  # token de deploy CI/CD
+
+# Integrações
+DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/…"
+VIACEP_URL="https://viacep.com.br/ws"
+NOMINATIM_URL="https://nominatim.openstreetmap.org/search"
 ```
 
-> **Dica:** `supabase start` sobe Postgres + APIs em Docker para dev offline.
-
 ---
 
-## 🛠️ Passo‑a‑passo rápido (local)
+## 🚀 Instalação & Configuração
 
 ```bash
-# 1️⃣  Clone do repositório
-$ git clone git@github.com:Gelborn/ad-backend.git && cd ad-backend
+# 1) Clone o repositório
+git clone git@github.com:SeuOrg/ad-backend.git
+cd ad-backend
 
-# 2️⃣  Instalar a CLI (escolha UMA opção)
-$ brew install supabase/tap/supabase     # macOS
-# ou
-$ npx supabase --help                    # zero‑install
+# 2) Instale o Supabase CLI (se ainda não tiver)
+npm install -g supabase
 
-# 3️⃣  Vínculo com o projeto (pule enquanto estiver só em dev local)
-$ supabase link --project-ref <PROJECT_REF>
+# 3) Configure variáveis de ambiente
+cp .env.example .env
+# preencha .env com suas credenciais
 
-# 4️⃣  Ambiente de desenvolvimento
-$ supabase start        # containers: Postgres, Auth, Storage, Studio
-$ supabase db reset     # aplica migrations + seed.sql
+# 4) Linka seu projeto Supabase
+supabase link --project-ref "$SUPABASE_REF" --password "$SUPABASE_DB_PASSWORD"
 ```
 
-### Criar coisas novas
+---
+
+## 📂 Migrações de Banco de Dados
+
+Todos os scripts versionados ficam em `supabase/migrations/`:
 
 ```bash
-# Nova migration
-supabase migration new add_table_x
-# (edite o SQL gerado)
-supabase db push        # aplica local + grava histórico
+# Aplicar todas as migrations no BD
+supabase db push --password "$SUPABASE_DB_PASSWORD"
+```
 
-# Nova Edge Function
-supabase functions new my_function --no-open
-supabase functions serve              # hot‑reload local
+* **0001\_init.sql**: schema inicial (tabelas e extensões).
+
+---
+
+## 🌱 Seed de Dados
+
+Temos um arquivo com dados fake para desenvolvimento:
+
+```bash
+# Executar seed (precisa do CLI v1.135+)
+supabase db seed run
+```
+
+Isso popula tabelas como OSCs, restaurantes de exemplo etc.
+
+---
+
+## 🧩 Functions (Edge)
+
+As Edge Functions ficam em `supabase/functions/`. O deploy delas é feito via CLI:
+
+### 🛡 Funções Privadas (exigem JWT)
+
+* `liberate_donation`
+* `register_restaurant`
+* `release_donation`
+* `send_notifications`
+
+```bash
+supabase functions deploy \
+  liberate_donation \
+  register_restaurant \
+  release_donation \
+  send_notifications
+```
+
+### 🔓 Funções Públicas (sem verificação JWT)
+
+* `geocode_address`
+* `accept_donation`
+* `deny_donation`
+
+```bash
+supabase functions deploy \
+  geocode_address \
+  accept_donation \
+  deny_donation \
+  --no-verify-jwt
 ```
 
 ---
 
-## 🚀 Deploy automático (GitHub Actions)
+## 🖥 Desenvolvimento Local
 
-O workflow **.github/workflows/deploy.yml** roda a cada *push* na branch **main**:
+1. Inicie o emulador Supabase (opcional):
 
-```yaml
-name: Deploy Supabase
+   ```bash
+   supabase start
+   ```
+2. Em outro terminal, aplique migrations e seed:
 
-on:
-  push:
-    branches: [main]
+   ```bash
+   supabase db push
+   supabase db seed run
+   ```
+3. Para testar uma Edge Function localmente (direto no Deno):
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Supabase CLI
-        uses: supabase/setup-cli@v1
-        with:
-          version: latest
-
-      - name: Supabase link
-        run: supabase link --project-ref ${{ secrets.SUPABASE_REF }}
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-
-      - name: Push migrations
-        run: supabase db push
-
-      - name: Deploy functions
-        run: supabase functions deploy --verify-jwt
-```
-
-1. Adicione `SUPABASE_ACCESS_TOKEN` e `SUPABASE_REF` em **Settings → Secrets → Actions**.
-2. Ao fazer `git push`, o workflow aplica as migrations e publica/atualiza todas as Edge Functions.
+   ```bash
+   cd supabase/functions/geocode_address
+   deno run --allow-env --allow-net index.ts
+   ```
 
 ---
 
-## 🔐 Convenções de segurança
+## 🤖 CI/CD (GitHub Actions)
 
-| Chave / Token           | Uso                 | Onde armazenar                      |
-| ----------------------- | ------------------- | ----------------------------------- |
-| `anon`                  | Front‑end / SDK     | `.env.example` (pode ficar público) |
-| `service_role`          | Edge Functions / CI | **NUNCA** em código; use secrets    |
-| Tokens de APIs externas | Edge Functions      | secrets                             |
+No push para `main`, acionamos o workflow em `.github/workflows/deploy.yml`:
 
-*Todas as políticas **RLS** ficam versionadas em `migrations/*.sql`.*
+1. **Checkout** do código
+2. **Setup Supabase CLI**
+3. **Link** no projeto (`supabase link`)
+4. **Push migrations** (`supabase db push`)
+5. **Deploy funções privadas**
+6. **Deploy funções públicas** (com `--no-verify-jwt`)
 
----
-
-## 📚 Referências úteis
-
-* [Supabase Docs](https://supabase.com/docs)
-* [Extensões `cube` / `earthdistance`](https://postgis.net/docs/)
-* [ViaCEP](https://viacep.com.br) · [Nominatim](https://nominatim.org)
+As credenciais (`SUPABASE_ACCESS_TOKEN`, `SUPABASE_DB_PASSWORD`, `SUPABASE_REF`) devem estar definidas nos **Secrets** do GitHub.
 
 ---
 
-## 🚧 Próximos passos
+## 🤝 Contribuição
 
-* Implementar lógica em `functions/*/index.ts`.
-* Criar novas migrations conforme o modelo evoluir.
-* Popular `seed/` com dados de teste realistas.
-* Ajustar `deploy.yml` se precisar de etapas extras (testes, lint, etc.).
+Sinta-se à vontade para:
 
-Sinta‑se à vontade para abrir *issues* ou enviar *PRs*.
+* Abrir **issues** para bugs ou sugestões
+* Enviar **pull requests** com melhorias ou correções
+
+Por favor, siga o **Padrão de Commits** e crie novas migrations sempre que alterar o schema.
+
+---
+
+> Desenvolvido com ♥️ pelo time Arcos Dourados.
