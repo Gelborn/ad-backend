@@ -5,9 +5,10 @@ serve({
   "/liberate_donation": async (req: Request) => {
     // CORS headers to apply on all responses
     const CORS_HEADERS = {
-      "Access-Control-Allow-Origin": "*",              // ou seu domínio específico
+      "Access-Control-Allow-Origin": "*",               // ou seu domínio
       "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Authorization, Content-Type",
+      // agora incluindo x-client-info
+      "Access-Control-Allow-Headers": "Authorization, Content-Type, x-client-info",
     };
 
     // 1) Preflight CORS
@@ -28,10 +29,9 @@ serve({
 
     try {
       // 3) Setup Supabase client com Service Role Key + JWT
-      const SUPABASE_URL  = Deno.env.get("SUPABASE_URL")!;
-      const SERVICE_KEY   = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-      const jwt           = req.headers.get("authorization")?.replace("Bearer ", "");
-
+      const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+      const SERVICE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const jwt          = req.headers.get("authorization")?.replace("Bearer ", "");
       if (!jwt) {
         return new Response(
           JSON.stringify({ code: "MISSING_JWT", message: "JWT não fornecido" }),
@@ -44,7 +44,6 @@ serve({
           }
         );
       }
-
       const supa = createClient(SUPABASE_URL, SERVICE_KEY, {
         global: { headers: { Authorization: `Bearer ${jwt}` } }
       });
@@ -60,7 +59,6 @@ serve({
       if (error) {
         let status = 400;
         let payload: Record<string,string> = {};
-
         switch (error.message) {
           case "NO_PACKAGES_IN_STOCK":
             status = 409;
@@ -77,7 +75,6 @@ serve({
           default:
             throw error;
         }
-
         return new Response(JSON.stringify(payload), {
           status,
           headers: {
