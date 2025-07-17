@@ -45,7 +45,7 @@ jobs:
 
       - name: Deploy public Edge Functions
         run: |
-          for fn in geocode_address accept_donation deny_donation; do
+          for fn in geocode_address accept_donation deny_donation get_donation_details; do
             echo "Deploying $fn (no-verify-jwt)…"
             supabase functions deploy $fn --no-verify-jwt
           done
