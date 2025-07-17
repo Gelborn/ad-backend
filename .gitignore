@@ -10,6 +10,7 @@ supabase/.temp/
 
 # VSCode workspace settings dentro de functions
 supabase/functions/**/.vscode/
+.vscode/
 
 # Node modules (se houver pacotes JS/TS no repo)
 **/node_modules/

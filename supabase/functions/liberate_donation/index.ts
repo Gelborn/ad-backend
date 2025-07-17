@@ -1,75 +1,82 @@
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// Haversine para distância em metros
-function toRad(deg: number) { return (deg * Math.PI) / 180; }
-function haversine(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371e3;
-  const φ1 = toRad(lat1), φ2 = toRad(lat2);
-  const Δφ = toRad(lat2 - lat1), Δλ = toRad(lon2 - lon1);
-  const a = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
-
 serve({
   "/liberate_donation": async (req: Request) => {
-    if (req.method !== "POST") return new Response(null, { status: 405 });
-    const body = await req.json();
-    const { restaurant_id, package_ids } = body;
+    if (req.method !== "POST") {
+      return new Response(null, { status: 405 });
+    }
 
-    // 1) Extrai JWT do header e instancia client com Service Role Key
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceKey  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const jwtHeader  = req.headers.get("authorization")?.replace("Bearer ", "");
-    if (!jwtHeader) return new Response("Missing JWT", { status: 401 });
+    try {
+      // 1) Setup Supabase client com Service Role Key + JWT
+      const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+      const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const jwt = req.headers.get("authorization")?.replace("Bearer ", "");
+      if (!jwt) {
+        return new Response(
+          JSON.stringify({ code: "MISSING_JWT", message: "JWT não fornecido" }),
+          { status: 401, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      const supa = createClient(SUPABASE_URL, SERVICE_KEY, {
+        global: { headers: { Authorization: `Bearer ${jwt}` } }
+      });
 
-    const supa = createClient(supabaseUrl, serviceKey, {
-      global: { headers: { Authorization: `Bearer ${jwtHeader}` } }
-    });
+      // 2) Parse do body
+      const { restaurant_id } = await req.json();
+      console.log("→ Liberate donation for restaurant:", restaurant_id);
 
-    // 2) Busca coords do restaurante
-    const { data: rest, error: rErr } = await supa
-      .from("restaurants")
-      .select("lat,lng")
-      .eq("id", restaurant_id)
-      .single();
-    if (rErr || !rest) return new Response(rErr?.message || "Restaurant not found", { status: 404 });
+      // 3) Chama RPC atômica
+      const { data, error } = await supa
+        .rpc("release_donation", { in_restaurant_id: restaurant_id });
 
-    // 3) Lista OSCs ativas
-    const { data: oscs, error: oErr } = await supa
-      .from("osc")
-      .select("id,lat,lng,last_received_at")
-      .eq("active", true);
-    if (oErr || !oscs?.length) return new Response(oErr?.message || "No OSC available", { status: 404 });
+      if (error) {
+        // Mapeia erros específicos para o front
+        switch (error.message) {
+          case "NO_PACKAGES_IN_STOCK":
+            return new Response(
+              JSON.stringify({
+                code: "NO_PACKAGES_IN_STOCK",
+                message: "Não há pacotes em estoque para liberar."
+              }),
+              { status: 409, headers: { "Content-Type": "application/json" } }
+            );
+          case "RESTAURANT_NOT_FOUND":
+            return new Response(
+              JSON.stringify({ code: "RESTAURANT_NOT_FOUND", message: "Restaurante não encontrado." }),
+              { status: 404, headers: { "Content-Type": "application/json" } }
+            );
+          case "NO_OSC_AVAILABLE":
+            return new Response(
+              JSON.stringify({ code: "NO_OSC_AVAILABLE", message: "Nenhuma OSC ativa disponível." }),
+              { status: 404, headers: { "Content-Type": "application/json" } }
+            );
+          default:
+            throw error;
+        }
+      }
 
-    // 4) Seleciona a mais próxima
-    const pick = oscs
-      .map(o => ({ ...o, dist: haversine(rest.lat, rest.lng, o.lat, o.lng) }))
-      .sort((a, b) => a.dist - b.dist || new Date(a.last_received_at).getTime() - new Date(b.last_received_at).getTime())[0];
+      const { donation_id, security_code } = (data as any)[0];
+      console.log("→ Donation created:", donation_id, security_code);
 
-    // 5) Insere doação e retorna o ID
-    const code = crypto.randomUUID().slice(0, 6);
-    const { data: dData, error: dErr } = await supa
-      .from("donations")
-      .insert([{ restaurant_id, osc_id: pick.id, status: "pending", security_code: code }])
-      .select("id");            // <-- força o retorno da linha criada
-    if (dErr || !dData?.length) return new Response(dErr?.message || "Insert failed", { status: 400 });
-    const donation_id = dData[0].id;
+      // 4) Dispara notificação
+      const notif = await supa.functions.invoke("send_notifications", {
+        body: { donation_id, security_code }
+      });
+      console.log("→ Notification result:", notif);
 
-    // 6) Vincula pacotes
-    await Promise.all(
-      package_ids.map(id =>
-        supa.from("donation_packages").insert({ donation_id, package_id: id })
-      )
-    );
+      // 5) Retorna sucesso
+      return new Response(
+        JSON.stringify({ donation_id, security_code }),
+        { headers: { "Content-Type": "application/json" } }
+      );
 
-    // 7) Envia notificação
-    await supa.functions.invoke("send_notifications", { body: { donation_id, security_code: code } });
-
-    // 8) Responde JSON
-    return new Response(JSON.stringify({ donation_id, security_code: code }), {
-      headers: { "Content-Type": "application/json" }
-    });
+    } catch (err: any) {
+      console.error("‼ liberate_donation ERROR:", err);
+      return new Response(
+        JSON.stringify({ code: "INTERNAL_ERROR", message: err.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
   }
 });
