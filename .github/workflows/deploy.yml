@@ -13,8 +13,7 @@ jobs:
       SUPABASE_REF:          ${{ secrets.SUPABASE_REF }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
@@ -37,19 +36,18 @@ jobs:
 
       - name: Deploy private Edge Functions
         run: |
-          # só as funções que exigem JWT
-          supabase functions deploy liberate_donation \
+          supabase functions deploy \
+            liberate_donation \
             register_restaurant \
             release_donation \
             send_notifications \
-            --force
+            --use-api
 
       - name: Deploy public Edge Functions
         run: |
-          # funções que devem aceitar chamadas sem JWT
           supabase functions deploy \
             geocode_address \
             accept_donation \
             deny_donation \
             --no-verify-jwt \
-            --force
+            --use-api
