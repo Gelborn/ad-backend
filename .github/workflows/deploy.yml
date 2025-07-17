@@ -2,8 +2,7 @@ name: Deploy Supabase
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   deploy:
@@ -28,21 +27,29 @@ jobs:
             --project-ref "$SUPABASE_REF" \
             --password "$SUPABASE_DB_PASSWORD"
 
+      - name: "Debug: listar funções"
+        run: |
+          echo "🔍 Conteúdo de supabase/functions:"
+          ls -R supabase/functions || true
+
       - name: Migrate database
         run: supabase db push
 
       - name: Deploy private Edge Functions
         run: |
-          supabase functions deploy \
-            liberate_donation \
+          # só as funções que exigem JWT
+          supabase functions deploy liberate_donation \
             register_restaurant \
             release_donation \
-            send_notifications
+            send_notifications \
+            --force
 
       - name: Deploy public Edge Functions
         run: |
+          # funções que devem aceitar chamadas sem JWT
           supabase functions deploy \
             geocode_address \
             accept_donation \
             deny_donation \
-            --no-verify-jwt
+            --no-verify-jwt \
+            --force
