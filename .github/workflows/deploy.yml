@@ -2,7 +2,8 @@ name: Deploy Supabase
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   deploy:
@@ -13,7 +14,8 @@ jobs:
       SUPABASE_REF:          ${{ secrets.SUPABASE_REF }}
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
@@ -36,18 +38,14 @@ jobs:
 
       - name: Deploy private Edge Functions
         run: |
-          supabase functions deploy \
-            liberate_donation \
-            register_restaurant \
-            release_donation \
-            send_notifications \
-            --use-api
+          for fn in liberate_donation register_restaurant release_donation send_notifications; do
+            echo "Deploying $fn…"
+            supabase functions deploy $fn
+          done
 
       - name: Deploy public Edge Functions
         run: |
-          supabase functions deploy \
-            geocode_address \
-            accept_donation \
-            deny_donation \
-            --no-verify-jwt \
-            --use-api
+          for fn in geocode_address accept_donation deny_donation; do
+            echo "Deploying $fn (no-verify-jwt)…"
+            supabase functions deploy $fn --no-verify-jwt
+          done
