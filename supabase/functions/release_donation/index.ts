@@ -43,7 +43,7 @@ serve({
       const now = new Date().toISOString();
       const { data: donationRows, error: updErr } = await supa
         .from("donations")
-        .update({ status: "released", released_at: now })
+        .update({ status: "picked_up", picked_up_at: now })
         .eq("security_code", security_code)
         .eq("status", "accepted")
         .select("id, restaurant_id, osc_id, status, created_at, released_at");
