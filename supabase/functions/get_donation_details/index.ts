@@ -65,6 +65,7 @@ serve({
           id,
           quantity,
           created_at,
+          expires_at,
           status,
           items (
             id,
@@ -85,6 +86,7 @@ serve({
       quantity:      row.packages.quantity,
       status:        row.packages.status,
       created_at:    row.packages.created_at,
+      expires_at:    row.packages.expires_at,
       item: {
         id:          row.packages.items.id,
         name:        row.packages.items.name,
