@@ -97,6 +97,8 @@ serve({
             quantity,
             status,
             created_at,
+            label_code,
+            expires_at,
             items (
               id,
               name,
