@@ -5,9 +5,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const DISCORD_WEBHOOK = Deno.env.get("DISCORD_WEBHOOK_URL")!;
 const SUPA_URL        = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY     = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const APP_URL         = Deno.env.get("APP_URL")!;
 
-// hardcode da URL de front e rota
-const FRONTEND_URL    = "https://magnificent-kitten-9c59d2.netlify.app";
+// hardcode da rota
 const CONFIRM_PATH    = "/confirm-donation";
 
 serve({
@@ -56,7 +56,7 @@ serve({
     }
 
     // monta e envia a mensagem com o link
-    const link    = `${FRONTEND_URL}${CONFIRM_PATH}/${security_code}`;
+    const link    = `${APP_URL}${CONFIRM_PATH}/${security_code}`;
     const content = [
       "📢 **Nova Doação!**",
       `**Restaurante:** ${rest.name}`,

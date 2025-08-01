@@ -2,8 +2,7 @@ name: Deploy Supabase
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   deploy:
@@ -14,38 +13,55 @@ jobs:
       SUPABASE_REF:          ${{ secrets.SUPABASE_REF }}
 
     steps:
-      - name: Checkout repository
+      # 1 — checkout
+      - name: Checkout
         uses: actions/checkout@v3
 
+      # 2 — CLI
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
         with:
           version: latest
 
-      - name: Link Supabase project
+      # 3 — link
+      - name: Link project
         run: |
           supabase link \
             --project-ref "$SUPABASE_REF" \
-            --password "$SUPABASE_DB_PASSWORD"
+            --password    "$SUPABASE_DB_PASSWORD"
 
-      - name: "Debug: listar funções"
-        run: |
-          echo "🔍 Conteúdo de supabase/functions:"
-          ls -R supabase/functions || true
-
+      # 4 — migrations
       - name: Migrate database
         run: supabase db push
 
-      - name: Deploy private Edge Functions
+      # 5 — deploy Edge Functions
+      - name: Deploy private Edge Functions (JWT verificado)
         run: |
-          for fn in liberate_donation register_restaurant release_donation send_notifications; do
-            echo "Deploying $fn…"
-            supabase functions deploy $fn
+          private_fns=(
+            cf_create_osc
+            cf_create_restaurant
+            cf_send_invite_email
+            restaurant_webhook_user_confirmed
+            restaurant_liberate_donation
+            restaurant_release_donation
+            register_restaurant
+            util_send_notifications
+          )
+          for fn in "${private_fns[@]}"; do
+            echo "🔐 Deploying $fn"
+            supabase functions deploy "$fn"
           done
 
-      - name: Deploy public Edge Functions
+      - name: Deploy public Edge Functions (--no-verify-jwt)
         run: |
-          for fn in geocode_address accept_donation deny_donation get_donation_details; do
-            echo "Deploying $fn (no-verify-jwt)…"
-            supabase functions deploy $fn --no-verify-jwt
+          public_fns=(
+            geocode_address
+            util_cep_info
+            osc_accept_donation
+            osc_deny_donation
+            osc_get_donation_details
+          )
+          for fn in "${public_fns[@]}"; do
+            echo "🌐 Deploying $fn (no-verify-jwt)"
+            supabase functions deploy "$fn" --no-verify-jwt
           done
