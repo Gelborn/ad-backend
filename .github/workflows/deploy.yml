@@ -39,8 +39,11 @@ jobs:
         run: |
           private_fns=(
             cf_create_osc
+            cf_create_partnership
             cf_create_restaurant
+            cf_match_oscs
             cf_send_invite_email
+            cf_update_favorite
             restaurant_webhook_user_confirmed
             restaurant_liberate_donation
             restaurant_release_donation
