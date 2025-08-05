@@ -23,20 +23,18 @@ jobs:
         with:
           version: latest
 
-      # 3 — link projeto
+      # 3 — link (na raiz)
       - name: Link project
-        working-directory: supabase
         run: |
           supabase link \
             --project-ref "$SUPABASE_REF" \
             --password    "$SUPABASE_DB_PASSWORD"
 
-      # 4 — migrations
+      # 4 — migrations (na raiz → encontra supabase/migrations)
       - name: Migrate database
-        working-directory: supabase
         run: supabase db push
 
-      # 5a — deploy Edge Functions privadas (JWT verificado)
+      # 5a — deploy funções privadas  (executa dentro de supabase/)
       - name: Deploy private Edge Functions
         working-directory: supabase
         run: |
@@ -59,7 +57,7 @@ jobs:
               --import-map functions/import_map.json
           done
 
-      # 5b — deploy Edge Functions públicas (no-verify-jwt)
+      # 5b — deploy funções públicas (executa dentro de supabase/)
       - name: Deploy public Edge Functions
         working-directory: supabase
         run: |
