@@ -59,20 +59,7 @@ const handler = async (req: Request): Promise<Response> => {
       return new Response("CEP inválido", { status: 422, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    const { data, error } = await supaAdmin.auth.admin.listUsers({
-      email: emailLc,
-      page: 1,
-      perPage: 1,
-    });
-    if (error) throw error;
-    
-    const duplicate = data?.users?.some(
-      (u) => u.email?.toLowerCase() === emailLc,
-    );
-    
     /* ---------- Verifica se o e-mail já está cadastrado ---------- */
-    const emailLc = email.toLowerCase();                  // normaliza
-
     const { data: existing, error: dupErr } = await supabase
       .from('restaurants')
       .select('id')                                       // não precisa de tudo
