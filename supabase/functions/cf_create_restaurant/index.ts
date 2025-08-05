@@ -123,7 +123,7 @@ const handler = async (req: Request): Promise<Response> => {
 
     /* ---------- Done ---------- */
     return new Response(JSON.stringify({ id: restaurant.id }), {
-      status: 201,
+      status: 200,
       headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" },
     });
 
