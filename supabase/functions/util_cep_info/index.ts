@@ -8,16 +8,6 @@ async function handler(req: Request): Promise<Response> {
   const cors = handleCors(req);
   if (cors) return cors;
 
-  // CEP na query (?cep=01001000)
-  const cep = new URL(req.url).searchParams.get("cep")?.replace(/\D/g, "") ?? "";
-
-  if (!validateCep(cep)) {
-    return new Response("CEP inválido", {
-      status: 422,
-      headers: corsHeaders(req.headers.get("origin")),
-    });
-  }
-
   try {
     const info = await fetchCepInfo(cep);
     return new Response(JSON.stringify(info), {
