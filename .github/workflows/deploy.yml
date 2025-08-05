@@ -13,30 +13,29 @@ jobs:
       SUPABASE_REF:          ${{ secrets.SUPABASE_REF }}
 
     steps:
-      # 1 — Checkout repo
+      # 1 — Checkout
       - name: Checkout
         uses: actions/checkout@v3
 
-      # 2 — Install Supabase CLI
+      # 2 — CLI
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
         with:
           version: latest
 
-      # 3 — Link project (gera token local; roda na raiz)
+      # 3 — Link project  (raiz)
       - name: Link project
         run: |
           supabase link \
             --project-ref "$SUPABASE_REF" \
             --password    "$SUPABASE_DB_PASSWORD"
 
-      # 4 — Run migrations (raiz → encontra supabase/migrations)
+      # 4 — Migrations   (raiz → encontra supabase/migrations)
       - name: Migrate database
         run: supabase db push
 
-      # 5a — Deploy private Edge Functions (verify JWT = true)
+      # 5a — Deploy private Edge Functions
       - name: Deploy private Edge Functions
-        working-directory: supabase
         run: |
           private_fns=(
             cf_create_osc
@@ -55,12 +54,11 @@ jobs:
             echo "🔐 Deploying $fn"
             supabase functions deploy "$fn" \
               --project-ref "$SUPABASE_REF" \
-              --import-map functions/import_map.json
+              --import-map supabase/functions/import_map.json
           done
 
       # 5b — Deploy public Edge Functions (no-verify-jwt)
       - name: Deploy public Edge Functions
-        working-directory: supabase
         run: |
           public_fns=(
             geocode_address
@@ -74,5 +72,5 @@ jobs:
             supabase functions deploy "$fn" \
               --project-ref "$SUPABASE_REF" \
               --no-verify-jwt \
-              --import-map functions/import_map.json
+              --import-map supabase/functions/import_map.json
           done
