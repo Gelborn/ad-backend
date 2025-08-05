@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
-import { handleCors, corsHeaders } from "../_lib/cors.ts";
-import { validateCep, fetchCepInfo } from "../_lib/cep.ts";
+import { handleCors, corsHeaders } from "$lib/cors.ts";
+import { validateCep, fetchCepInfo } from "$lib/cep.ts";
 
 serve(async (req) => {
   const cors = handleCors(req);

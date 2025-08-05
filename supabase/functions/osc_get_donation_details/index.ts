@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { handleCors, corsHeaders } from "../_lib/cors.ts";
+import { handleCors, corsHeaders } from "$lib/cors.ts";
 
 /* service-role → ignora RLS, leitura garantida */
 const supa = createClient(

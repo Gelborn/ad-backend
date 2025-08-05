@@ -1,9 +1,9 @@
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { handleCors, corsHeaders } from "../_lib/cors.ts";
-import { geocodeByCep } from "../_lib/geocode.ts";
-import { validateCep }  from "../_lib/cep.ts";
-import { validateCnpj } from "../_lib/cnpj.ts";
+import { handleCors, corsHeaders } from "$lib/cors.ts";
+import { geocodeByCep } from "$lib/geocode.ts";
+import { validateCep }  from "$lib/cep.ts";
+import { validateCnpj } from "$lib/cnpj.ts";
 
 const supa      = createClient(Deno.env.get("SUPABASE_URL")!,  Deno.env.get("SUPABASE_ANON_KEY")!);
 const supaAdmin = createClient(Deno.env.get("SUPABASE_URL")!,  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
