@@ -13,7 +13,7 @@ const ANON_KEY     = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SRV_KEY      = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const APP_URL      = Deno.env.get("APP_URL")!;
 
-/* Client que IGNORA RLS (service-role) */
+/* Client service-role (ignora RLS) */
 const supaAdmin = createClient(SUPABASE_URL, SRV_KEY);
 
 /* ──────────────── Handler ──────────────── */
@@ -53,20 +53,17 @@ const handler = async (req: Request): Promise<Response> => {
       phone,
     } = await req.json();
 
-    /* Normaliza e-mail */
     const emailLc = (emailOwner as string).trim().toLowerCase();
 
     if (!validateCep(cep)) {
       return new Response("CEP inválido", { status: 422, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    /* ---------- Checa duplicidade (citext eq) ---------- */
-    const { data: dup } = await supaAdmin
-      .from("auth.users")
-      .select("id")
-      .eq("email", emailLc)
-      .maybeSingle();
-    if (dup) {
+    /* ---------- Checa duplicidade via Admin API ---------- */
+    const { data: found, error: listErr } = await supaAdmin.auth.admin
+      .listUsers({ email: emailLc, page: 1, perPage: 1 });
+    if (listErr) throw listErr;
+    if (found?.users?.length) {
       return new Response("E-mail já cadastrado", {
         status: 409,
         headers: corsHeaders(req.headers.get("origin")),
@@ -88,7 +85,7 @@ const handler = async (req: Request): Promise<Response> => {
       .insert({
         name,
         phone,
-        email: emailLc,            // NOT NULL na tabela
+        email: emailLc,            // NOT NULL
         street: street ?? geo.street,
         number,
         city:   city   ?? geo.city,
@@ -97,7 +94,7 @@ const handler = async (req: Request): Promise<Response> => {
         lat: geo.lat,
         lng: geo.lng,
         status: "invite_sent",
-        user_id: ownerId,          // NOT NULL na tabela
+        user_id: ownerId,          // NOT NULL
       })
       .select()
       .single();
