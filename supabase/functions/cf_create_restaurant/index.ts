@@ -71,9 +71,22 @@ const handler = async (req: Request): Promise<Response> => {
     );
     
     /* ---------- Verifica se o e-mail já está cadastrado ---------- */
-    if (duplicate) {
+    const emailLc = email.toLowerCase();                  // normaliza
+
+    const { data: existing, error: dupErr } = await supabase
+      .from('restaurants')
+      .select('id')                                       // não precisa de tudo
+      .ilike('email', emailLc)                            // case-insensitive
+      .maybeSingle();                                     // devolve 0 ou 1
+
+    if (dupErr) throw dupErr;
+
+    if (existing) {
       return new Response(
-        JSON.stringify({ code: 'email_exists', message: 'E-mail já cadastrado' }),
+        JSON.stringify({
+          code: 'email_exists',
+          message: 'E-mail já cadastrado',
+        }),
         {
           status: 409,
           headers: {
@@ -82,7 +95,7 @@ const handler = async (req: Request): Promise<Response> => {
           },
         },
       );
-    }    
+    }
 
     /* ---------- Convida usuário ---------- */
     const { data: inviteRes, error: inviteErr } = await supaAdmin.auth.admin
