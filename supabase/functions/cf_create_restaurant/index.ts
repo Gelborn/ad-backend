@@ -1,24 +1,18 @@
 // supabase/functions/cf_create_restaurant/index.ts
-// Edge Function — cria restaurante e convida o proprietário (acesso: CF admin)
-
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCors, corsHeaders } from "$lib/cors.ts";
 import { geocodeByCep }  from "$lib/geocode.ts";
 import { validateCep }   from "$lib/cep.ts";
 
-/* ──────────────── Env ──────────────── */
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const ANON_KEY     = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SRV_KEY      = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const APP_URL      = Deno.env.get("APP_URL")!;
 
-/* Client que IGNORA RLS (service-role) */
-const supaAdmin = createClient(SUPABASE_URL, SRV_KEY);
+const supaAdmin = createClient(SUPABASE_URL, SRV_KEY); // ignora RLS
 
-/* ──────────────── Handler ──────────────── */
 const handler = async (req: Request): Promise<Response> => {
-  /* CORS */
   const cors = handleCors(req);
   if (cors) return cors;
   if (req.method !== "POST") {
@@ -26,20 +20,17 @@ const handler = async (req: Request): Promise<Response> => {
   }
 
   try {
-    /* ---------- Auth (CF admin) ---------- */
+    /* ---------- Auth CF ---------- */
     const jwt = req.headers.get("authorization")?.replace("Bearer ", "");
-    if (!jwt) {
-      return new Response("Auth required", { status: 401, headers: corsHeaders(req.headers.get("origin")) });
-    }
+    if (!jwt) return new Response("Auth required", { status: 401, headers: corsHeaders(req.headers.get("origin")) });
+
     const supa = createClient(
       SUPABASE_URL,
       ANON_KEY,
       { global: { headers: { Authorization: `Bearer ${jwt}` } } }
     );
     const { data: isCf } = await supa.rpc("is_cf");
-    if (!isCf) {
-      return new Response("Forbidden", { status: 403, headers: corsHeaders(req.headers.get("origin")) });
-    }
+    if (!isCf) return new Response("Forbidden", { status: 403, headers: corsHeaders(req.headers.get("origin")) });
 
     /* ---------- Body ---------- */
     const { name, emailOwner, cep, number, street, city, uf, phone } = await req.json();
@@ -47,30 +38,27 @@ const handler = async (req: Request): Promise<Response> => {
       return new Response("CEP inválido", { status: 422, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    /* ---------- Procura usuário existente ---------- */
-    const { data: existingUser } = await supaAdmin.auth.admin
-      .getUserByEmail(emailOwner)
-      .catch(() => ({ data: null })); // se não achar
-
-    if (existingUser) {
-      // e-mail já cadastrado → aborta
-      return new Response("E-mail já cadastrado", {
-        status: 409,
-        headers: corsHeaders(req.headers.get("origin")),
-      });
+    /* ---------- Checa duplicidade ---------- */
+    const { data: dup } = await supaAdmin
+      .from("auth.users")
+      .select("id")
+      .ilike("email", emailOwner)
+      .maybeSingle();
+    if (dup) {
+      return new Response("E-mail já cadastrado", { status: 409, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    /* ---------- Convida novo usuário ---------- */
+    /* ---------- Convida usuário ---------- */
     const { data: inviteRes, error: inviteErr } = await supaAdmin.auth.admin
       .inviteUserByEmail(emailOwner, { redirectTo: `${APP_URL}/set-password` });
     if (inviteErr || !inviteRes?.user) throw new Error("Falha ao convidar usuário");
-    const ownerId = inviteRes.user.id;
+    const ownerId = inviteRes.user.id;                    // ✅ id imediato
 
     /* ---------- Geocoding ---------- */
     const geo = await geocodeByCep(cep, number);
 
     /* ---------- Insere restaurante ---------- */
-    const { data: restaurant, error } = await supa
+    const { data: restaurant, error: restErr } = await supa
       .from("restaurants")
       .insert({
         name,
@@ -83,40 +71,31 @@ const handler = async (req: Request): Promise<Response> => {
         lat: geo.lat,
         lng: geo.lng,
         status: "invite_sent",
-        user_id: ownerId,             // NOT NULL
+        user_id: ownerId,                                 // NOT NULL
       })
       .select()
       .single();
-    if (error) throw error;
+    if (restErr) throw restErr;
 
     /* ---------- Liga user ↔ restaurant ---------- */
-    await supaAdmin
-      .from("restaurant_users")
-      .upsert({
-        user_id:       ownerId,
-        restaurant_id: restaurant.id,
-        role:          "owner",
-      });
+    await supaAdmin.from("restaurant_users").upsert({
+      user_id:       ownerId,
+      restaurant_id: restaurant.id,
+      role:          "owner",
+    });
 
     return new Response(JSON.stringify({ id: restaurant.id }), {
       status: 201,
       headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" },
     });
+
   } catch (err: any) {
     console.error("cf_create_restaurant ERROR:", err);
     return new Response(
       JSON.stringify({ code: "INTERNAL_ERROR", message: err.message }),
-      {
-        status: 500,
-        headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" },
-      }
+      { status: 500, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
     );
   }
 };
 
-/* ──────────────── Router ──────────────── */
 serve({ "/cf_create_restaurant": handler });
-
-/* Endpoint final:
-   POST https://<project>.supabase.co/functions/v1/cf_create_restaurant
-*/
