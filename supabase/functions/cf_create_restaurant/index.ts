@@ -60,7 +60,7 @@ const handler = async (req: Request): Promise<Response> => {
     }
 
     /* ---------- Verifica se o e-mail já está cadastrado ---------- */
-    const { data: existing, error: dupErr } = await supabase
+    const { data: existing, error: dupErr } = await supa
       .from('restaurants')
       .select('id')                                       // não precisa de tudo
       .ilike('email', emailLc)                            // case-insensitive
