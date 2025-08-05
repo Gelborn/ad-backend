@@ -8,50 +8,44 @@ import { geocodeByCep }  from "$lib/geocode.ts";
 import { validateCep }   from "$lib/cep.ts";
 import { inviteUser }    from "$lib/invite.ts";
 
-/* ---------- Supabase clients ---------- */
-const supa      = createClient(
-  Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_ANON_KEY")!
-);
-const supaAdmin = createClient(
-  Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-);
+const SUPABASE_URL  = Deno.env.get("SUPABASE_URL")!;
+const ANON_KEY      = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SRV_KEY       = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const APP_URL       = Deno.env.get("APP_URL")!;
 
-const APP_URL = Deno.env.get("APP_URL")!;
+/* Client que **ignora RLS** (service role) */
+const supaAdmin = createClient(SUPABASE_URL, SRV_KEY);
 
-/* ---------- Handler ---------- */
 const handler = async (req: Request): Promise<Response> => {
-  /* -------- CORS pre-flight -------- */
+  /* CORS */
   const cors = handleCors(req);
   if (cors) return cors;
 
   if (req.method !== "POST") {
-    return new Response(null, {
-      status: 405,
-      headers: corsHeaders(req.headers.get("origin")),
-    });
+    return new Response(null, { status: 405, headers: corsHeaders(req.headers.get("origin")) });
   }
 
   try {
-    /* -------- Auth (apenas CF admin) -------- */
+    /* ---------- Auth (CF admin) ---------- */
     const jwt = req.headers.get("authorization")?.replace("Bearer ", "");
     if (!jwt) {
-      return new Response("Auth required", {
-        status: 401,
-        headers: corsHeaders(req.headers.get("origin")),
-      });
-    }
-    supa.auth.setAuth(jwt);
-    const { data: isCf } = await supa.rpc("is_cf");
-    if (!isCf) {
-      return new Response("Forbidden", {
-        status: 403,
-        headers: corsHeaders(req.headers.get("origin")),
-      });
+      return new Response("Auth required", { status: 401, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    /* -------- Body -------- */
+    /* Client que **respeita RLS** — contém o JWT */
+    const supa = createClient(
+      SUPABASE_URL,
+      ANON_KEY,
+      { global: { headers: { Authorization: `Bearer ${jwt}` } } }
+    );
+
+    /* Confirma que o JWT pertence a um usuário CF */
+    const { data: isCf } = await supa.rpc("is_cf");
+    if (!isCf) {
+      return new Response("Forbidden", { status: 403, headers: corsHeaders(req.headers.get("origin")) });
+    }
+
+    /* ---------- Body ---------- */
     const {
       name,
       emailOwner,
@@ -64,29 +58,23 @@ const handler = async (req: Request): Promise<Response> => {
     } = await req.json();
 
     if (!validateCep(cep)) {
-      return new Response("CEP inválido", {
-        status: 422,
-        headers: corsHeaders(req.headers.get("origin")),
-      });
+      return new Response("CEP inválido", { status: 422, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    /* -------- Checa duplicidade de e-mail -------- */
+    /* ---------- Dup e-mail ---------- */
     const { data: dup } = await supaAdmin
       .from("auth.users")
       .select("id")
       .ilike("email", emailOwner)
       .maybeSingle();
     if (dup) {
-      return new Response("E-mail já cadastrado", {
-        status: 409,
-        headers: corsHeaders(req.headers.get("origin")),
-      });
+      return new Response("E-mail já cadastrado", { status: 409, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    /* -------- Geocoding (CEP + número) -------- */
+    /* ---------- Geocoding ---------- */
     const geo = await geocodeByCep(cep, number);
 
-    /* -------- Insere restaurante -------- */
+    /* ---------- Insere restaurante ---------- */
     const { data: restaurant, error } = await supa
       .from("restaurants")
       .insert({
@@ -105,43 +93,29 @@ const handler = async (req: Request): Promise<Response> => {
       .single();
     if (error) throw error;
 
-    /* -------- Convida proprietário -------- */
+    /* ---------- Convida proprietário ---------- */
     const user = await inviteUser(emailOwner, `${APP_URL}/set-password`);
-    await supaAdmin
-      .from("restaurant_users")
-      .insert({
-        user_id:       user.id,
-        restaurant_id: restaurant.id,
-        role:          "owner",
-      });
+    await supaAdmin.from("restaurant_users").insert({
+      user_id:       user.id,
+      restaurant_id: restaurant.id,
+      role:          "owner",
+    });
 
     return new Response(JSON.stringify({ id: restaurant.id }), {
       status: 201,
-      headers: {
-        ...corsHeaders(req.headers.get("origin")),
-        "Content-Type": "application/json",
-      },
+      headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" },
     });
+
   } catch (err: any) {
     console.error("cf_create_restaurant ERROR:", err);
     return new Response(
       JSON.stringify({ code: "INTERNAL_ERROR", message: err.message }),
       {
         status: 500,
-        headers: {
-          ...corsHeaders(req.headers.get("origin")),
-          "Content-Type": "application/json",
-        },
+        headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" },
       }
     );
   }
 };
 
-/* ---------- Router explícito ---------- */
-serve({
-  "/cf_create_restaurant": handler,
-});
-
-/* Endpoint final:
-   POST https://<project>.supabase.co/functions/v1/cf_create_restaurant
-*/
+serve({ "/cf_create_restaurant": handler });
