@@ -1,24 +1,29 @@
+// supabase/functions/cf_create_partnership/index.ts
+// Edge Function — cria / atualiza parceria Restaurante ↔ OSC
+
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCors, corsHeaders } from "$lib/cors.ts";
 
-/* Supabase client que RESPEITA RLS (Anon Key) */
+/* ---------- Supabase client (RLS respeitado) ---------- */
 const supa = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_ANON_KEY")!
 );
 
-serve(async (req) => {
-  /* ---------------- CORS ---------------- */
+/* ---------- Handler ---------- */
+const handler = async (req: Request): Promise<Response> => {
+  /* -------- CORS pre-flight -------- */
   const cors = handleCors(req);
   if (cors) return cors;
+
   const origin = req.headers.get("origin");
 
   if (req.method !== "POST") {
     return new Response(null, { status: 405, headers: corsHeaders(origin) });
   }
 
-  /* ---------------- Auth (CF admin) ---------------- */
+  /* -------- Auth (apenas CF admin) -------- */
   const jwt = req.headers.get("authorization")?.replace("Bearer ", "");
   if (!jwt) {
     return new Response("Auth required", { status: 401, headers: corsHeaders(origin) });
@@ -29,7 +34,7 @@ serve(async (req) => {
     return new Response("Forbidden", { status: 403, headers: corsHeaders(origin) });
   }
 
-  /* ---------------- Body ---------------- */
+  /* -------- Body -------- */
   const { restaurant_id, osc_id, is_favorite = false } = await req.json();
   if (!restaurant_id || !osc_id) {
     return new Response("Missing restaurant_id or osc_id", {
@@ -39,7 +44,7 @@ serve(async (req) => {
   }
 
   try {
-    /* 1) Remove favorito anterior (se for o caso) */
+    /* 1) Remove favorito anterior (se necessário) */
     if (is_favorite) {
       await supa
         .from("partnerships")
@@ -53,7 +58,7 @@ serve(async (req) => {
       { onConflict: "restaurant_id,osc_id" }
     );
 
-    /* 3) Retorna lista atualizada (opcional) */
+    /* 3) Retorna lista atualizada */
     const { data } = await supa
       .from("partnerships")
       .select("*")
@@ -63,16 +68,15 @@ serve(async (req) => {
       status: 200,
       headers: { ...corsHeaders(origin), "Content-Type": "application/json" },
     });
-
   } catch (e: any) {
-    /* ---------- Tratamento de FK (23503) ---------- */
+    /* FK violada (23503) */
     if (e.code === "23503") {
       const friendly =
         e.message.includes("restaurant_id")
           ? "Restaurante não encontrado"
         : e.message.includes("osc_id")
           ? "OSC não encontrada"
-        : "Entidade inexistente";
+          : "Entidade inexistente";
 
       return new Response(friendly, {
         status: 404,
@@ -80,20 +84,20 @@ serve(async (req) => {
       });
     }
 
-    /* ---------- Qualquer outro erro ---------- */
+    /* Outro erro */
     console.error("cf_create_partnership ERROR:", e);
     return new Response(e.message, {
       status: 400,
       headers: { ...corsHeaders(origin), "Content-Type": "text/plain" },
     });
   }
-});
+};
 
-/* ──────────────── Rotas ────────────────
-   /cf_create_partnership  → runtime regional  (/functions/v1/…)
-   /cf-create-partnership  → runtime global    (.functions.supabase.co/…)
-*/
+/* ---------- Router explícito ---------- */
 serve({
   "/cf_create_partnership": handler,
-  "/cf-create-partnership": handler,
 });
+
+/* Endpoint final:
+   POST https://<project>.supabase.co/functions/v1/cf_create_partnership
+*/
