@@ -23,8 +23,9 @@ jobs:
         with:
           version: latest
 
-      # 3 — link
+      # 3 — link projeto
       - name: Link project
+        working-directory: supabase
         run: |
           supabase link \
             --project-ref "$SUPABASE_REF" \
@@ -32,10 +33,12 @@ jobs:
 
       # 4 — migrations
       - name: Migrate database
+        working-directory: supabase
         run: supabase db push
 
-      # 5 — deploy Edge Functions
-      - name: Deploy private Edge Functions (JWT verificado)
+      # 5a — deploy Edge Functions privadas (JWT verificado)
+      - name: Deploy private Edge Functions
+        working-directory: supabase
         run: |
           private_fns=(
             cf_create_osc
@@ -56,7 +59,9 @@ jobs:
               --import-map functions/import_map.json
           done
 
-      - name: Deploy public Edge Functions (--no-verify-jwt)
+      # 5b — deploy Edge Functions públicas (no-verify-jwt)
+      - name: Deploy public Edge Functions
+        working-directory: supabase
         run: |
           public_fns=(
             geocode_address
