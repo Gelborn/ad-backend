@@ -1,6 +1,4 @@
 // supabase/functions/cf_create_restaurant/index.ts
-// Edge Function — cria restaurante e convida o proprietário (CF admin only)
-
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCors, corsHeaders } from "$lib/cors.ts";
@@ -8,90 +6,70 @@ import { geocodeByCep }  from "$lib/geocode.ts";
 import { validateCep }   from "$lib/cep.ts";
 import { inviteUser }    from "$lib/invite.ts";
 
-/* ---------- Env ---------- */
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const ANON_KEY     = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SRV_KEY      = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const APP_URL      = Deno.env.get("APP_URL")!;
 
-/* ---------- Client que ignora RLS (service role) ---------- */
+/* Service-role client (ignora RLS) */
 const supaAdmin = createClient(SUPABASE_URL, SRV_KEY);
 
-/* ---------- Handler ---------- */
 const handler = async (req: Request): Promise<Response> => {
-  /* CORS */
+  /* --- CORS --- */
   const cors = handleCors(req);
   if (cors) return cors;
-
   if (req.method !== "POST") {
     return new Response(null, { status: 405, headers: corsHeaders(req.headers.get("origin")) });
   }
 
   try {
-    /* -------- Auth (CF admin) -------- */
+    /* --- Auth (CF admin) --- */
     const jwt = req.headers.get("authorization")?.replace("Bearer ", "");
     if (!jwt) {
-      return new Response("Auth required", {
-        status: 401,
-        headers: corsHeaders(req.headers.get("origin")),
-      });
+      return new Response("Auth required", { status: 401, headers: corsHeaders(req.headers.get("origin")) });
     }
-
-    /* Client que respeita RLS (JWT) */
     const supa = createClient(
       SUPABASE_URL,
       ANON_KEY,
       { global: { headers: { Authorization: `Bearer ${jwt}` } } }
     );
-
-    /* Confirma que o usuário é CF */
     const { data: isCf } = await supa.rpc("is_cf");
     if (!isCf) {
-      return new Response("Forbidden", {
-        status: 403,
-        headers: corsHeaders(req.headers.get("origin")),
-      });
+      return new Response("Forbidden", { status: 403, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    /* -------- Body -------- */
-    const {
-      name,
-      emailOwner,
-      cep,
-      number,
-      street,
-      city,
-      uf,
-      phone,
-    } = await req.json();
-
+    /* --- Body --- */
+    const { name, emailOwner, cep, number, street, city, uf, phone } = await req.json();
     if (!validateCep(cep)) {
-      return new Response("CEP inválido", {
-        status: 422,
-        headers: corsHeaders(req.headers.get("origin")),
-      });
+      return new Response("CEP inválido", { status: 422, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    /* -------- Dup-e-mail -------- */
+    /* --- E-mail duplicado? --- */
     const { data: dup } = await supaAdmin
       .from("auth.users")
       .select("id")
       .ilike("email", emailOwner)
       .maybeSingle();
     if (dup) {
-      return new Response("E-mail já cadastrado", {
-        status: 409,
-        headers: corsHeaders(req.headers.get("origin")),
-      });
+      return new Response("E-mail já cadastrado", { status: 409, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    /* -------- Convida / recupera proprietário -------- */
-    const user = await inviteUser(emailOwner, `${APP_URL}/set-password`);
+    /* --- Convida proprietário --- */
+    await inviteUser(emailOwner, `${APP_URL}/set-password`);
 
-    /* -------- Geocoding -------- */
+    /* --- Recupera user_id --- */
+    const { data: ownerRow, error: ownerErr } = await supaAdmin
+      .from("auth.users")
+      .select("id")
+      .ilike("email", emailOwner)
+      .maybeSingle();
+    if (ownerErr || !ownerRow) throw new Error("Owner user not found after invite");
+    const ownerId = ownerRow.id;
+
+    /* --- Geocoding --- */
     const geo = await geocodeByCep(cep, number);
 
-    /* -------- Insere restaurante -------- */
+    /* --- Insere restaurante --- */
     const { data: restaurant, error } = await supa
       .from("restaurants")
       .insert({
@@ -105,25 +83,22 @@ const handler = async (req: Request): Promise<Response> => {
         lat: geo.lat,
         lng: geo.lng,
         status: "invite_sent",
-        user_id: user.id,           // NOT NULL
+        user_id: ownerId,
       })
       .select()
       .single();
     if (error) throw error;
 
-    /* -------- Liga user ↔ restaurant -------- */
+    /* --- Liga user↔restaurant --- */
     await supaAdmin.from("restaurant_users").insert({
-      user_id:       user.id,
+      user_id:       ownerId,
       restaurant_id: restaurant.id,
       role:          "owner",
     });
 
     return new Response(JSON.stringify({ id: restaurant.id }), {
       status: 201,
-      headers: {
-        ...corsHeaders(req.headers.get("origin")),
-        "Content-Type": "application/json",
-      },
+      headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" },
     });
   } catch (err: any) {
     console.error("cf_create_restaurant ERROR:", err);
@@ -131,18 +106,10 @@ const handler = async (req: Request): Promise<Response> => {
       JSON.stringify({ code: "INTERNAL_ERROR", message: err.message }),
       {
         status: 500,
-        headers: {
-          ...corsHeaders(req.headers.get("origin")),
-          "Content-Type": "application/json",
-        },
+        headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" },
       }
     );
   }
 };
 
-/* ---------- Router explícito ---------- */
 serve({ "/cf_create_restaurant": handler });
-
-/* Endpoint final:
-   POST https://<project>.supabase.co/functions/v1/cf_create_restaurant
-*/
