@@ -74,3 +74,12 @@ serve(async (req) => {
     });
   }
 });
+
+/* ──────────────── Rotas ────────────────
+   /cf_create_restaurant  → runtime regional  (/functions/v1/…)
+   /cf-create-restaurant  → runtime global    (.functions.supabase.co/…)
+*/
+serve({
+  "/cf_create_restaurant": handler,
+  "/cf-create-restaurant": handler,
+});

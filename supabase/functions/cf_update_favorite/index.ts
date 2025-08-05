@@ -39,3 +39,12 @@ serve(async (req) => {
     return new Response(e.message, { status: 400, headers: corsHeaders(req.headers.get("origin")) });
   }
 });
+
+/* ──────────────── Rotas ────────────────
+   /cf_update_favorite  → runtime regional  (/functions/v1/…)
+   /cf-update-favorite  → runtime global    (.functions.supabase.co/…)
+*/
+serve({
+  "/cf_update_favorite": handler,
+  "/cf-update-favorite": handler,
+});

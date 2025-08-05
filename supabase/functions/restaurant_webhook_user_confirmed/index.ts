@@ -17,3 +17,12 @@ serve(async (req) => {
 
   return new Response("ok", { status: 200 });
 });
+
+/* ──────────────── Rotas ────────────────
+   /restaurant_webhook_user_confirmed  → runtime regional  (/functions/v1/…)
+   /restaurant-webhook-user-confirmed  → runtime global    (.functions.supabase.co/…)
+*/
+serve({
+  "/restaurant_webhook_user_confirmed": handler,
+  "/restaurant-webhook-user-confirmed": handler,
+});

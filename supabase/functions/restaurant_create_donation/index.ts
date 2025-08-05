@@ -86,3 +86,12 @@ serve(async (req) => {
     );
   }
 });
+
+/* ──────────────── Rotas ────────────────
+   /restaurant_create_donation  → runtime regional  (/functions/v1/…)
+   /restaurant-create-donation  → runtime global    (.functions.supabase.co/…)
+*/
+serve({
+  "/restaurant_create_donation": handler,
+  "/restaurant-create-donation": handler,
+});

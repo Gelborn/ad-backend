@@ -52,3 +52,12 @@ serve(async (req) => {
     return new Response(err.message, { status: 400, headers: corsHeaders(req.headers.get("origin")) });
   }
 });
+
+/* ──────────────── Rotas ────────────────
+   /osc_accept_donation  → runtime regional  (/functions/v1/…)
+   /osc-accept-donation  → runtime global    (.functions.supabase.co/…)
+*/
+serve({
+  "/osc_accept_donation": handler,
+  "/osc-accept-donation": handler,
+});

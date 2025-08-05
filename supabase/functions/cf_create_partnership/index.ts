@@ -88,3 +88,12 @@ serve(async (req) => {
     });
   }
 });
+
+/* ──────────────── Rotas ────────────────
+   /cf_create_partnership  → runtime regional  (/functions/v1/…)
+   /cf-create-partnership  → runtime global    (.functions.supabase.co/…)
+*/
+serve({
+  "/cf_create_partnership": handler,
+  "/cf-create-partnership": handler,
+});

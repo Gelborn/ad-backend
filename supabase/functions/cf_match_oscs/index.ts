@@ -39,3 +39,12 @@ serve(async (req) => {
     headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" },
   });
 });
+
+/* ──────────────── Rotas ────────────────
+   /cf_match_oscs  → runtime regional  (/functions/v1/…)
+   /cf-match-oscs  → runtime global    (.functions.supabase.co/…)
+*/
+serve({
+  "/cf_match_oscs": handler,
+  "/cf-match-oscs": handler,
+});

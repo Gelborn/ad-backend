@@ -93,3 +93,12 @@ serve(async (req) => {
     headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" },
   });
 });
+
+/* ──────────────── Rotas ────────────────
+   /osc_get_donation_details  → runtime regional  (/functions/v1/…)
+   /osc-get-donation-details  → runtime global    (.functions.supabase.co/…)
+*/
+serve({
+  "/osc_get_donation_details": handler,
+  "/osc-get-donation-details": handler,
+});

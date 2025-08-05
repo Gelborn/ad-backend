@@ -56,3 +56,12 @@ serve(async (req) => {
     });
   }
 });
+
+/* ──────────────── Rotas ────────────────
+   /util_cep_info  → runtime regional  (/functions/v1/…)
+   /util-cep-info  → runtime global    (.functions.supabase.co/…)
+*/
+serve({
+  "/cf_create_osc": handler,
+  "/cf-create-osc": handler,
+});

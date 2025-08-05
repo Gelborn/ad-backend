@@ -44,9 +44,10 @@ jobs:
             cf_match_oscs
             cf_send_invite_email
             cf_update_favorite
-            restaurant_webhook_user_confirmed
+            restaurant_create_donation
             restaurant_liberate_donation
             restaurant_release_donation
+            restaurant_webhook_user_confirmed
             register_restaurant
             util_send_notifications
           )

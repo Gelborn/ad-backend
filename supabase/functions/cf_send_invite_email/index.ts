@@ -43,3 +43,12 @@ serve(async (req) => {
     });
   }
 });
+
+/* ──────────────── Rotas ────────────────
+   /cf_send_invite_email  → runtime regional  (/functions/v1/…)
+   /cf-send-invite-email  → runtime global    (.functions.supabase.co/…)
+*/
+serve({
+  "/cf_send_invite_email": handler,
+  "/cf-send-invite-email": handler,
+});
