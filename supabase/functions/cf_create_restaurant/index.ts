@@ -59,16 +59,30 @@ const handler = async (req: Request): Promise<Response> => {
       return new Response("CEP inválido", { status: 422, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    /* ---------- Checa duplicidade via Admin API ---------- */
-    const { data: found, error: listErr } = await supaAdmin.auth.admin
-      .listUsers({ email: emailLc, page: 1, perPage: 1 });
-    if (listErr) throw listErr;
-    if (found?.users?.length) {
-      return new Response("E-mail já cadastrado", {
-        status: 409,
-        headers: corsHeaders(req.headers.get("origin")),
-      });
-    }
+    const { data, error } = await supaAdmin.auth.admin.listUsers({
+      email: emailLc,
+      page: 1,
+      perPage: 1,
+    });
+    if (error) throw error;
+    
+    const duplicate = data?.users?.some(
+      (u) => u.email?.toLowerCase() === emailLc,
+    );
+    
+    /* ---------- Verifica se o e-mail já está cadastrado ---------- */
+    if (duplicate) {
+      return new Response(
+        JSON.stringify({ code: 'email_exists', message: 'E-mail já cadastrado' }),
+        {
+          status: 409,
+          headers: {
+            ...corsHeaders(req.headers.get('origin')),
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+    }    
 
     /* ---------- Convida usuário ---------- */
     const { data: inviteRes, error: inviteErr } = await supaAdmin.auth.admin
