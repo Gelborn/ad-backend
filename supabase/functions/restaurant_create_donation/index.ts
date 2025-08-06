@@ -72,6 +72,9 @@ const handler = async (req: Request): Promise<Response> => {
     /* ---------- Notificação --------------------------------------- */
     await supaAdmin.functions.invoke("util_send_notifications", {
       body: { donation_id, security_code },
+      headers: {
+        apikey: SERVICE_KEY,
+      },
     });
 
     /* ---------- Response ------------------------------------------ */
