@@ -1,6 +1,4 @@
 // supabase/functions/restaurant_create_donation/index.ts
-// Edge Function — restaurante libera um pacote (cria doação) e envia notificação
-
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCors, corsHeaders } from "$lib/cors.ts";
@@ -10,7 +8,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const ANON_KEY     = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SRV_KEY      = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-/* ──────────────── Service-role client (notificação) ──────────────── */
+/* ──────────────── Clients ──────────────── */
 const supaAdmin = createClient(SUPABASE_URL, SRV_KEY);
 
 /* ──────────────── Handler ──────────────── */
@@ -32,7 +30,7 @@ const handler = async (req: Request): Promise<Response> => {
       );
     }
 
-    /* ---------- User-scoped client (respeita RLS) ------------------ */
+    /* ---------- User-scoped client (RLS) --------------------------- */
     const supaUser = createClient(
       SUPABASE_URL,
       ANON_KEY,
@@ -48,8 +46,8 @@ const handler = async (req: Request): Promise<Response> => {
       );
     }
 
-    /* ---------- RPC release_donation_safe -------------------------- */
-    const { data, error } = await supaUser.rpc("release_donation_safe", {
+    /* ---------- RPC release_donation_partnered -------------------- */
+    const { data, error } = await supaUser.rpc("release_donation_partnered", {
       p_restaurant_id: restaurant_id,
     });
 
@@ -57,7 +55,7 @@ const handler = async (req: Request): Promise<Response> => {
       const map: Record<string, { status: number; msg: string }> = {
         NO_PACKAGES_IN_STOCK: { status: 409, msg: "Não há pacotes em estoque para liberar." },
         RESTAURANT_NOT_FOUND: { status: 404, msg: "Restaurante não encontrado." },
-        NO_OSC_AVAILABLE:    { status: 404, msg: "Nenhuma OSC ativa disponível." },
+        NO_PARTNERSHIPS:      { status: 404, msg: "Restaurante não possui parcerias cadastradas." },
       };
       const found = map[error.message];
       if (found) {
@@ -91,11 +89,9 @@ const handler = async (req: Request): Promise<Response> => {
   }
 };
 
-/* ──────────────── Router (único serve) ──────────────── */
-serve({
-  "/restaurant_create_donation": handler,
-});
+/* ──────────────── Router ──────────────── */
+serve({ "/restaurant_create_donation": handler });
 
-/* Endpoint final:
+/* Endpoint:
    POST https://<project>.supabase.co/functions/v1/restaurant_create_donation
 */
