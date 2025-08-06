@@ -57,5 +57,4 @@ async function handler(req: Request): Promise<Response> {
    dá pra exportar direto: `serve(handler)`. */
 serve({
   "/util_cep_info": handler,
-  "/util-cep-info": handler,
 });

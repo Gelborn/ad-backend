@@ -1,45 +1,50 @@
+// supabase/functions/restaurant_release_donation/index.ts
+// Edge Function — restaurante confirma retirada (status ➜ picked_up)
+
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCors, corsHeaders } from "$lib/cors.ts";
 
-/* ------------------------------------------------------------------ */
-/*  CLIENTS                                                           */
-/* ------------------------------------------------------------------ */
-const supaUser = createClient(                              // respeita RLS
-  Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_ANON_KEY")!
-);
+/* ──────────────── Env ──────────────── */
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const ANON_KEY     = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-serve(async (req) => {
-  /* CORS pre-flight */
+/* ──────────────── Handler ──────────────── */
+const handler = async (req: Request): Promise<Response> => {
+  /* CORS + método --------------------------------------------------- */
   const cors = handleCors(req);
   if (cors) return cors;
-
   if (req.method !== "POST") {
     return new Response(null, { status: 405, headers: corsHeaders(req.headers.get("origin")) });
   }
 
   try {
-    /* --- JWT do restaurante ---------------------------------------- */
+    /* ---------- JWT ------------------------------------------------ */
     const jwt = req.headers.get("authorization")?.replace("Bearer ", "");
     if (!jwt) {
       return new Response(
         JSON.stringify({ code: "MISSING_JWT", message: "Missing authorization header" }),
-        { status: 401, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
+        { status: 401, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
       );
     }
-    supaUser.auth.setAuth(jwt);
 
-    /* --- Body ------------------------------------------------------ */
+    /* ---------- User-scoped client (respeita RLS) ------------------ */
+    const supaUser = createClient(
+      SUPABASE_URL,
+      ANON_KEY,
+      { global: { headers: { Authorization: `Bearer ${jwt}` } } },
+    );
+
+    /* ---------- Body ---------------------------------------------- */
     const { security_code } = await req.json();
     if (!security_code) {
       return new Response(
         JSON.stringify({ code: "MISSING_CODE", message: "Missing security_code" }),
-        { status: 400, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
+        { status: 400, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
       );
     }
 
-    /* --- Update donation (RLS garante escopo do restaurante) ------ */
+    /* ---------- Update donation ----------------------------------- */
     const now = new Date().toISOString();
     const { data: rows, error: updErr } = await supaUser
       .from("donations")
@@ -51,18 +56,18 @@ serve(async (req) => {
     if (updErr) {
       return new Response(
         JSON.stringify({ code: "UPDATE_ERROR", message: updErr.message }),
-        { status: 400, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
+        { status: 400, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
       );
     }
     if (!rows?.length) {
       return new Response(
         JSON.stringify({ code: "NOT_FOUND_OR_WRONG_STATUS", message: "Donation not found or wrong status" }),
-        { status: 404, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
+        { status: 404, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
       );
     }
     const donation = rows[0];
 
-    /* --- Extra data (nome restaurante / OSC / pacotes) ------------- */
+    /* ---------- Extra data (restaurante / OSC / pacotes) ----------- */
     const [{ data: rest }, { data: osc }] = await Promise.all([
       supaUser.from("restaurants").select("name").eq("id", donation.restaurant_id).single(),
       supaUser.from("osc").select("name").eq("id", donation.osc_id).single(),
@@ -89,7 +94,7 @@ serve(async (req) => {
       item:       row.packages.items,
     }));
 
-    /* --- Resposta -------------------------------------------------- */
+    /* ---------- Response ------------------------------------------ */
     return new Response(JSON.stringify({
       donation_id: donation.id,
       status:      donation.status,
@@ -104,19 +109,19 @@ serve(async (req) => {
     });
 
   } catch (err: any) {
-    console.error("‼ restaurant_release_donation ERROR:", err);
+    console.error("restaurant_release_donation ERROR:", err);
     return new Response(
       JSON.stringify({ code: "INTERNAL_ERROR", message: err.message }),
-      { status: 500, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
+      { status: 500, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
     );
   }
-});
+};
 
-/* ──────────────── Rotas ────────────────
-   /restaurant_release_donation  → runtime regional  (/functions/v1/…)
-   /restaurant-release-donation  → runtime global    (.functions.supabase.co/…)
-*/
+/* ──────────────── Router (único serve) ──────────────── */
 serve({
   "/restaurant_release_donation": handler,
-  "/restaurant-release-donation": handler,
 });
+
+/* Endpoint final:
+   POST https://<project>.supabase.co/functions/v1/restaurant_release_donation
+*/
