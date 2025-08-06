@@ -11,8 +11,8 @@ const APP_URL         = Deno.env.get("APP_URL")!;
 const CONFIRM_PATH    = "/confirm-donation";
 
 serve({
-  "/send_notifications": async (req: Request) => {
-    console.log("→ send_notifications invoked");
+  "/util_send_notifications": async (req: Request) => {
+    console.log("→ util_send_notifications invoked");
     let body: any;
     try {
       body = await req.json();
