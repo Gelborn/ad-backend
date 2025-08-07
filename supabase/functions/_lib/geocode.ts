@@ -14,42 +14,35 @@ interface NomResp {
 }
 
 /**
- * Retorna endereço + coordenadas a partir do CEP e, opcionalmente, número.
+ * Retorna endereço + coordenadas a partir do CEP.
+ * Usa ViaCEP para dados de endereço e Nominatim só pelo CEP para lat/lng.
  */
-export async function geocodeByCep(cep: string, number?: string) {
+export async function geocodeByCep(cep: string) {
   const VIACEP    = Deno.env.get("VIACEP_URL")   ?? "https://viacep.com.br/ws";
-  const NOMINATIM =
-    Deno.env.get("NOMINATIM_URL") ??
-    "https://nominatim.openstreetmap.org/search"; // fallback público
+  const NOMINATIM = Deno.env.get("NOMINATIM_URL")
+    ?? "https://nominatim.openstreetmap.org/search";
 
-  /* --------------- ViaCEP --------------- */
-  const clean = cep.replace(/\D/g, "");
-  const r = await fetch(`${VIACEP}/${clean}/json/`);
-  if (!r.ok) throw new Error("CEP fail");
+  // 1) Consulta ViaCEP
+  const cleanCep = cep.replace(/\D/g, "");
+  const r = await fetch(`${VIACEP}/${cleanCep}/json/`);
+  if (!r.ok) throw new Error("Falha ao consultar ViaCEP");
   const vic: ViaCepResp = await r.json();
-  if (vic.erro) throw new Error("CEP not found");
+  if (vic.erro) throw new Error("CEP não encontrado em ViaCEP");
 
-  /* -------------- Nominatim -------------- */
-  const addressParts = [
-    vic.logradouro,
-    vic.bairro,
-    vic.localidade,
-    vic.uf,
-    "Brasil",
-  ]
-  const query = encodeURIComponent(addressParts.join(", "))
-
-  const n = await fetch(`${NOMINATIM}?q=${query}&format=json&limit=1`);
-  if (!n.ok) throw new Error("Geocode fail");
+  // 2) Consulta Nominatim apenas pelo CEP
+  const url = `${NOMINATIM}?postalcode=${cleanCep}&country=BR&format=json&limit=1`;
+  const n = await fetch(url);
+  if (!n.ok) throw new Error("Falha no geocoding reverso");
   const nom: NomResp[] = await n.json();
-  if (!nom.length) throw new Error("No coords");
+  if (!nom.length) throw new Error("Nenhuma coordenada retornada");
 
+  // 3) Retorna dados
   return {
-    street: vic.logradouro,
+    street:       vic.logradouro,
     neighborhood: vic.bairro,
-    city: vic.localidade,
-    uf: vic.uf,
-    lat: parseFloat(nom[0].lat),
-    lng: parseFloat(nom[0].lon),
+    city:         vic.localidade,
+    uf:           vic.uf,
+    lat:          parseFloat(nom[0].lat),
+    lng:          parseFloat(nom[0].lon),
   };
 }
