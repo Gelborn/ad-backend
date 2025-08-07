@@ -98,10 +98,9 @@ const handler = async (req: Request): Promise<Response> => {
 
     /* ─── 2) Gera & envia magic-link ─── */
     try {
-      await supaAdmin.auth.admin.generateLink({
+      await supaAdmin.auth.signInWithOtp({
         email: emailLc,
-        type:  "magiclink",
-        options: { redirectTo: `${APP_URL}/dashboard` },
+        options: { emailRedirectTo: `${APP_URL}/dashboard` },
       });
     } catch (linkErr: any) {
       console.error("Erro gerando magic link:", linkErr);
