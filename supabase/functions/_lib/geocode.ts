@@ -30,9 +30,14 @@ export async function geocodeByCep(cep: string, number?: string) {
   if (vic.erro) throw new Error("CEP not found");
 
   /* -------------- Nominatim -------------- */
-  const query = encodeURIComponent(
-    `${vic.logradouro} ${number ?? ""}, ${vic.bairro}, ${vic.localidade}, ${vic.uf}, Brasil`
-  );
+  const addressParts = [
+    vic.logradouro,
+    vic.bairro,
+    vic.localidade,
+    vic.uf,
+    "Brasil",
+  ]
+  const query = encodeURIComponent(addressParts.join(", "))
 
   const n = await fetch(`${NOMINATIM}?q=${query}&format=json&limit=1`);
   if (!n.ok) throw new Error("Geocode fail");
