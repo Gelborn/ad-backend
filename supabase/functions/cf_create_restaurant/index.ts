@@ -48,6 +48,9 @@ const handler = async (req: Request): Promise<Response> => {
     const { name, emailOwner, cep, number, street, city, uf, phone } = await req.json();
     const emailLc = (emailOwner as string).trim().toLowerCase();
 
+    // log cep
+    console.log("cep", cep);
+
     if (!validateCep(cep)) {
       return new Response(
         JSON.stringify({ code: "INVALID_CEP", message: "CEP inválido" }),
