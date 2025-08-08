@@ -58,7 +58,7 @@ const handler = async (req: Request): Promise<Response> => {
       package_id,
       packages (
         id, quantity, created_at, expires_at, status,
-        items ( id, name, description, unit )
+        items ( id, name, description, unit, unit_to_kg )
       )
     `)
     .eq("donation_id", donation.id);
@@ -73,6 +73,7 @@ const handler = async (req: Request): Promise<Response> => {
     status:     row.packages.status,
     created_at: row.packages.created_at,
     expires_at: row.packages.expires_at,
+    total_kg:   row.packages.items.unit == "unit" ? row.packages.quantity * row.packages.items.unit_to_kg : row.packages.quantity,
     item: {
       id:          row.packages.items.id,
       name:        row.packages.items.name,
