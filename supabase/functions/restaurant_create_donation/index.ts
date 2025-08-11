@@ -13,7 +13,9 @@ const supaAdmin = createClient(SUPABASE_URL, SRV_KEY);
 
 /* ──────────────── Handler ──────────────── */
 const handler = async (req: Request): Promise<Response> => {
-  const origin = req.headers.get("origin");
+  const origin = req.headers.get("origin") ?? "*";
+
+  // CORS / preflight
   const cors = handleCors(req);
   if (cors) return cors;
 
@@ -22,6 +24,8 @@ const handler = async (req: Request): Promise<Response> => {
   }
 
   try {
+    console.log("→ restaurant_create_donation invoked");
+
     /* ---------- JWT ------------------------------------------------ */
     const authHeader = req.headers.get("authorization");
     const jwt = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
@@ -38,7 +42,16 @@ const handler = async (req: Request): Promise<Response> => {
     });
 
     /* ---------- Body ---------------------------------------------- */
-    const { restaurant_id } = await req.json();
+    let payload: any;
+    try {
+      payload = await req.json();
+    } catch {
+      return new Response(
+        JSON.stringify({ code: "INVALID_JSON", message: "Body inválido" }),
+        { status: 400, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } },
+      );
+    }
+    const { restaurant_id } = payload ?? {};
     if (!restaurant_id) {
       return new Response(
         JSON.stringify({ code: "MISSING_RESTAURANT_ID", message: "restaurant_id ausente" }),
@@ -52,6 +65,7 @@ const handler = async (req: Request): Promise<Response> => {
     });
 
     if (error) {
+      console.error("RPC error:", error);
       const map: Record<string, { status: number; msg: string }> = {
         NO_PACKAGES_IN_STOCK: { status: 409, msg: "Não há pacotes em estoque para liberar." },
         RESTAURANT_NOT_FOUND: { status: 404, msg: "Restaurante não encontrado." },
@@ -67,15 +81,21 @@ const handler = async (req: Request): Promise<Response> => {
       throw error; // erro inesperado
     }
 
-    // RPC returns a single row
     const row = Array.isArray(data) ? data[0] : data;
     const { donation_id, security_code, osc_id, osc_name, osc_address, distance_km } = row || {};
+    console.log("RPC OK → donation_id:", donation_id, "osc_id:", osc_id);
 
     /* ---------- Notificação --------------------------------------- */
-    await supaAdmin.functions.invoke("util_send_notifications", {
-      body: { security_code },           // required
-      headers: { apikey: SRV_KEY },
-    });    
+    try {
+      await supaAdmin.functions.invoke("util_send_notifications", {
+        body: { security_code },
+        headers: { apikey: SRV_KEY },
+      });
+      console.log("Notifications invoked");
+    } catch (notifyErr) {
+      console.error("Notification invoke failed:", notifyErr);
+      // segue mesmo se notificação falhar
+    }
 
     /* ---------- Response ------------------------------------------ */
     return new Response(
@@ -91,15 +111,18 @@ const handler = async (req: Request): Promise<Response> => {
       }),
       { status: 200, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } },
     );
-
   } catch (err: any) {
     console.error("restaurant_create_donation ERROR:", err);
     return new Response(
-      JSON.stringify({ code: "INTERNAL_ERROR", message: err.message }),
-      { status: 500, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
+      JSON.stringify({ code: "INTERNAL_ERROR", message: err?.message ?? "Unknown error" }),
+      { status: 500, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } },
     );
   }
 };
 
 /* ──────────────── Router ──────────────── */
-serve({ "/restaurant_create_donation": handler });
+/* In Supabase, the request hits "/" inside the function. Keep both for safety. */
+serve({
+  "/": handler,
+  "/restaurant_create_donation": handler, // handy for local/manual testing
+});
