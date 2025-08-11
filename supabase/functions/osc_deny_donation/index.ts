@@ -1,27 +1,20 @@
 // supabase/functions/osc_deny_donation/index.ts
-// Edge Function — OSC recusa a doação (status ➜ denied)
-
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCors, corsHeaders } from "$lib/cors.ts";
 
-/* ──────────────── Env ──────────────── */
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SRV_KEY      = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-/* ──────────────── Client (service-role, ignora RLS) ──────────────── */
 const supa = createClient(SUPABASE_URL, SRV_KEY);
 
-/* ──────────────── Handler ──────────────── */
 const handler = async (req: Request): Promise<Response> => {
-  /* CORS + método --------------------------------------------------- */
   const cors = handleCors(req);
   if (cors) return cors;
   if (req.method !== "POST") {
     return new Response(null, { status: 405, headers: corsHeaders(req.headers.get("origin")) });
   }
 
-  /* ---------- Body ------------------------------------------------- */
   let body: { security_code?: string };
   try { body = await req.json(); } catch {
     return new Response("Invalid JSON", { status: 400, headers: corsHeaders(req.headers.get("origin")) });
@@ -32,24 +25,64 @@ const handler = async (req: Request): Promise<Response> => {
     return new Response("Missing security_code", { status: 400, headers: corsHeaders(req.headers.get("origin")) });
   }
 
-  /* ---------- Update donation -------------------------------------- */
   try {
-    const { data, error } = await supa
-      .from("donations")
-      .update({ status: "denied", accepted_at: new Date().toISOString() })
+    // 1) Find the open intent to anchor the donation_id (before RPC changes things)
+    const { data: currentIntent, error: iErr } = await supa
+      .from("donation_intents")
+      .select("donation_id, status")
       .eq("security_code", security_code)
-      .eq("status", "pending")
-      .select("id");
+      .single();
 
-    if (error) throw error;
-    if (!data.length) {
-      return new Response(
-        "Donation not found or not pending",
-        { status: 404, headers: corsHeaders(req.headers.get("origin")) },
-      );
+    if (iErr || !currentIntent || currentIntent.status !== "waiting_response") {
+      return new Response("Donation not found or not pending", {
+        status: 404,
+        headers: corsHeaders(req.headers.get("origin")),
+      });
     }
 
-    console.log("✅ Donation denied:", data[0].id);
+    const donationId = currentIntent.donation_id as string;
+
+    // 2) Execute deny + optional reroute
+    const { error: rpcErr } = await supa.rpc("osc_deny_and_reroute", { p_security_code: security_code });
+    if (rpcErr) {
+      if (rpcErr.message?.includes("DONATION_NOT_FOUND_OR_NOT_PENDING")) {
+        return new Response("Donation not found or not pending", {
+          status: 404,
+          headers: corsHeaders(req.headers.get("origin")),
+        });
+      }
+      throw rpcErr;
+    }
+
+    // 3) Check if there is a new 'waiting_response' intent for the same donation (rerouted)
+    const { data: newIntent, error: nErr } = await supa
+      .from("donation_intents")
+      .select("security_code, status, created_at")
+      .eq("donation_id", donationId)
+      .eq("status", "waiting_response")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    // If there’s no open intent now, it means donation was closed (denied/no reroute) → 204
+    if (nErr || !newIntent) {
+      return new Response(null, { status: 204, headers: corsHeaders(req.headers.get("origin")) });
+    }
+
+    // If the intent exists and code changed, notify the new OSC
+    if (newIntent.security_code && newIntent.security_code !== security_code) {
+      try {
+        await supa.functions.invoke("util_send_notifications", {
+          body: { security_code: newIntent.security_code },
+          headers: { apikey: SRV_KEY },
+        });
+      } catch (notifyErr) {
+        // We don't fail the deny flow on email issues; just log
+        console.error("osc_deny_donation: notify rerouted intent failed:", notifyErr);
+      }
+    }
+
+    // Same as before: no body
     return new Response(null, { status: 204, headers: corsHeaders(req.headers.get("origin")) });
 
   } catch (err: any) {
@@ -61,11 +94,4 @@ const handler = async (req: Request): Promise<Response> => {
   }
 };
 
-/* ──────────────── Router (único serve) ──────────────── */
-serve({
-  "/osc_deny_donation": handler,
-});
-
-/* Endpoint final:
-   POST https://<project>.supabase.co/functions/v1/osc_deny_donation
-*/
+serve({ "/osc_deny_donation": handler });

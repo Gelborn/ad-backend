@@ -1,5 +1,5 @@
 // supabase/functions/osc_get_donation_details/index.ts
-// Edge Function — devolve detalhes completos da doação para a OSC
+// Edge Function — devolve detalhes completos da doação para a OSC (via donation_intents)
 
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -9,6 +9,20 @@ import { handleCors, corsHeaders } from "$lib/cors.ts";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SRV_KEY      = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supa         = createClient(SUPABASE_URL, SRV_KEY);
+
+type IntentStatus = "waiting_response" | "accepted" | "denied" | "expired" | "re_routed";
+
+/** Normaliza o status para manter o contrato de resposta anterior */
+function mapIntentToDonationStatus(s: IntentStatus) {
+  switch (s) {
+    case "waiting_response": return "pending";
+    case "accepted":         return "accepted";
+    case "denied":           return "denied";
+    case "expired":          return "expired";
+    case "re_routed":        return "re_routed";
+    default:                 return "pending";
+  }
+}
 
 /* ──────────────── Handler ──────────────── */
 const handler = async (req: Request): Promise<Response> => {
@@ -29,16 +43,32 @@ const handler = async (req: Request): Promise<Response> => {
     return new Response("Missing security_code", { status: 400, headers: corsHeaders(req.headers.get("origin")) });
   }
 
-  /* ---------- 1) Donation ----------------------------------------- */
-  const { data: donation, error: dErr } = await supa
-    .from("donations")
-    .select("id, status, created_at, restaurant_id")
+  /* ---------- 1) Intent + Donation (fonte da verdade = donation_intents) ---- */
+  const { data: intentRow, error: iErr } = await supa
+    .from("donation_intents")
+    .select(`
+      id,
+      status,
+      donation_id,
+      security_code,
+      expires_at,
+      donations!inner (
+        id, status, created_at, restaurant_id
+      )
+    `)
     .eq("security_code", security_code)
     .single();
 
-  if (dErr || !donation) {
+  if (iErr || !intentRow) {
+    return new Response("Donation intent not found", { status: 404, headers: corsHeaders(req.headers.get("origin")) });
+  }
+
+  const donation = intentRow.donations;
+  if (!donation) {
     return new Response("Donation not found", { status: 404, headers: corsHeaders(req.headers.get("origin")) });
   }
+
+  const resolvedStatus = mapIntentToDonationStatus(intentRow.status as IntentStatus);
 
   /* ---------- 2) Restaurant --------------------------------------- */
   const { data: rest, error: rErr } = await supa
@@ -67,28 +97,36 @@ const handler = async (req: Request): Promise<Response> => {
     return new Response("Error fetching packages", { status: 500, headers: corsHeaders(req.headers.get("origin")) });
   }
 
-  const packages = (pkgRows ?? []).map((row: any) => ({
-    id:         row.packages.id,
-    quantity:   row.packages.quantity,
-    status:     row.packages.status,
-    created_at: row.packages.created_at,
-    expires_at: row.packages.expires_at,
-    total_kg:   row.packages.items.unit == "unit" ? row.packages.quantity * row.packages.items.unit_to_kg : row.packages.quantity,
-    item: {
-      id:          row.packages.items.id,
-      name:        row.packages.items.name,
-      description: row.packages.items.description,
-      unit:        row.packages.items.unit,
-    },
-  }));
+  const packages = (pkgRows ?? []).map((row: any) => {
+    const pkg = row.packages;
+    const item = pkg.items;
+    const isUnit = item?.unit === "unit";
+    const totalKg = isUnit ? (Number(pkg.quantity) * Number(item?.unit_to_kg ?? 0)) : Number(pkg.quantity);
 
-  /* ---------- 4) Response ----------------------------------------- */
+    return {
+      id:         pkg.id,
+      quantity:   pkg.quantity,
+      status:     pkg.status,
+      created_at: pkg.created_at,
+      expires_at: pkg.expires_at,
+      total_kg:   totalKg,
+      item: {
+        id:          item?.id,
+        name:        item?.name,
+        description: item?.description,
+        unit:        item?.unit,
+      },
+    };
+  });
+
+  /* ---------- 4) Response (contrato preservado) -------------------- */
   const result = {
     id:           donation.id,
-    status:       donation.status,
+    status:       resolvedStatus,         // ← agora vem do intent
     created_at:   donation.created_at,
     restaurant:   rest.name,
     security_code,
+    expires_at:   intentRow.expires_at,
     packages,
   };
 
@@ -103,6 +141,6 @@ serve({
   "/osc_get_donation_details": handler,
 });
 
-/* Endpoint final:
+/* Endpoint:
    POST https://<project>.supabase.co/functions/v1/osc_get_donation_details
 */

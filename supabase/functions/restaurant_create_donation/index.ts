@@ -13,40 +13,40 @@ const supaAdmin = createClient(SUPABASE_URL, SRV_KEY);
 
 /* ──────────────── Handler ──────────────── */
 const handler = async (req: Request): Promise<Response> => {
-  /* CORS + método --------------------------------------------------- */
+  const origin = req.headers.get("origin");
   const cors = handleCors(req);
   if (cors) return cors;
+
   if (req.method !== "POST") {
-    return new Response(null, { status: 405, headers: corsHeaders(req.headers.get("origin")) });
+    return new Response(null, { status: 405, headers: corsHeaders(origin) });
   }
 
   try {
     /* ---------- JWT ------------------------------------------------ */
-    const jwt = req.headers.get("authorization")?.replace("Bearer ", "");
+    const authHeader = req.headers.get("authorization");
+    const jwt = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
     if (!jwt) {
       return new Response(
         JSON.stringify({ code: "MISSING_JWT", message: "JWT não fornecido" }),
-        { status: 401, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
+        { status: 401, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } },
       );
     }
 
     /* ---------- User-scoped client (RLS) --------------------------- */
-    const supaUser = createClient(
-      SUPABASE_URL,
-      ANON_KEY,
-      { global: { headers: { Authorization: `Bearer ${jwt}` } } },
-    );
+    const supaUser = createClient(SUPABASE_URL, ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${jwt}` } },
+    });
 
     /* ---------- Body ---------------------------------------------- */
     const { restaurant_id } = await req.json();
     if (!restaurant_id) {
       return new Response(
         JSON.stringify({ code: "MISSING_RESTAURANT_ID", message: "restaurant_id ausente" }),
-        { status: 400, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
+        { status: 400, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } },
       );
     }
 
-    /* ---------- RPC release_donation_partnered -------------------- */
+    /* ---------- RPC (new) ----------------------------------------- */
     const { data, error } = await supaUser.rpc("release_donation_partnered", {
       p_restaurant_id: restaurant_id,
     });
@@ -55,32 +55,41 @@ const handler = async (req: Request): Promise<Response> => {
       const map: Record<string, { status: number; msg: string }> = {
         NO_PACKAGES_IN_STOCK: { status: 409, msg: "Não há pacotes em estoque para liberar." },
         RESTAURANT_NOT_FOUND: { status: 404, msg: "Restaurante não encontrado." },
-        NO_PARTNERSHIPS:      { status: 404, msg: "Restaurante não possui parcerias cadastradas." },
+        NO_OSC_AVAILABLE:     { status: 404, msg: "Nenhuma OSC disponível no raio configurado." },
       };
       const found = map[error.message];
       if (found) {
         return new Response(
           JSON.stringify({ code: error.message, message: found.msg }),
-          { status: found.status, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
+          { status: found.status, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } },
         );
       }
       throw error; // erro inesperado
     }
 
-    const { donation_id, security_code } = (data as any)[0];
+    // RPC returns a single row
+    const row = Array.isArray(data) ? data[0] : data;
+    const { donation_id, security_code, osc_id, osc_name, osc_address, distance_km } = row || {};
 
     /* ---------- Notificação --------------------------------------- */
     await supaAdmin.functions.invoke("util_send_notifications", {
-      body: { donation_id, security_code },
-      headers: {
-        apikey: SRV_KEY,
-      },
-    });
+      body: { security_code },           // required
+      headers: { apikey: SRV_KEY },
+    });    
 
     /* ---------- Response ------------------------------------------ */
     return new Response(
-      JSON.stringify({ donation_id, security_code }),
-      { status: 200, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
+      JSON.stringify({
+        donation_id,
+        security_code,
+        osc: {
+          id: osc_id,
+          name: osc_name,
+          address: osc_address,
+          distance_km,
+        },
+      }),
+      { status: 200, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } },
     );
 
   } catch (err: any) {
@@ -94,7 +103,3 @@ const handler = async (req: Request): Promise<Response> => {
 
 /* ──────────────── Router ──────────────── */
 serve({ "/restaurant_create_donation": handler });
-
-/* Endpoint:
-   POST https://<project>.supabase.co/functions/v1/restaurant_create_donation
-*/

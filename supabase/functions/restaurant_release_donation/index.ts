@@ -1,5 +1,5 @@
 // supabase/functions/restaurant_release_donation/index.ts
-// Edge Function — restaurante confirma retirada (status ➜ picked_up)
+// Edge Function — restaurante confirma retirada (atomic via RPC)
 
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -28,7 +28,7 @@ const handler = async (req: Request): Promise<Response> => {
       );
     }
 
-    /* ---------- User-scoped client (respeita RLS) ------------------ */
+    /* ---------- User-scoped client (RLS respected) ----------------- */
     const supaUser = createClient(
       SUPABASE_URL,
       ANON_KEY,
@@ -44,33 +44,49 @@ const handler = async (req: Request): Promise<Response> => {
       );
     }
 
-    /* ---------- Update donation ----------------------------------- */
-    const now = new Date().toISOString();
-    const { data: rows, error: updErr } = await supaUser
-      .from("donations")
-      .update({ status: "picked_up", picked_up_at: now })
-      .eq("security_code", security_code)
-      .eq("status", "accepted")
-      .select("id, restaurant_id, osc_id, status, created_at, released_at");
+    /* ---------- 1) Atomic pickup via RPC -------------------------- */
+    const { data: picked, error: rpcErr } = await supaUser
+      .rpc("donation_mark_picked_up", { p_security_code: security_code });
 
-    if (updErr) {
+    if (rpcErr) {
+      const msg = rpcErr.message || "";
+      if (msg.includes("INTENT_NOT_FOUND")) {
+        return new Response(
+          JSON.stringify({ code: "INTENT_NOT_FOUND", message: "Donation intent not found" }),
+          { status: 404, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
+        );
+      }
+      if (msg.includes("WRONG_STATUS")) {
+        return new Response(
+          JSON.stringify({ code: "WRONG_STATUS", message: "Donation not accepted or wrong status" }),
+          { status: 409, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
+        );
+      }
+      // Generic DB error
       return new Response(
-        JSON.stringify({ code: "UPDATE_ERROR", message: updErr.message }),
+        JSON.stringify({ code: "DB_ERROR", message: msg }),
         { status: 400, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
       );
     }
-    if (!rows?.length) {
+
+    // The RPC returns exactly one row
+    const row = Array.isArray(picked) ? picked[0] : picked;
+    if (!row) {
+      // Extremely unlikely, but be safe
       return new Response(
-        JSON.stringify({ code: "NOT_FOUND_OR_WRONG_STATUS", message: "Donation not found or wrong status" }),
-        { status: 404, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
+        JSON.stringify({ code: "DB_ERROR", message: "No data returned by RPC" }),
+        { status: 500, headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } },
       );
     }
-    const donation = rows[0];
 
-    /* ---------- Extra data (restaurante / OSC / pacotes) ----------- */
+    const donationId   = row.donation_id as string;
+    const restaurantId = row.restaurant_id as string;
+    const oscId        = row.osc_id as string;
+
+    /* ---------- 2) Enrich (names + packages now delivered) -------- */
     const [{ data: rest }, { data: osc }] = await Promise.all([
-      supaUser.from("restaurants").select("name").eq("id", donation.restaurant_id).single(),
-      supaUser.from("osc").select("name").eq("id", donation.osc_id).single(),
+      supaUser.from("restaurants").select("name").eq("id", restaurantId).single(),
+      supaUser.from("osc").select("name").eq("id", oscId).single(),
     ]);
 
     const { data: pkgRows } = await supaUser
@@ -79,27 +95,39 @@ const handler = async (req: Request): Promise<Response> => {
         package_id,
         packages (
           id, quantity, status, created_at, label_code, expires_at,
-          items ( id, name, description, unit )
+          items ( id, name, description, unit, unit_to_kg )
         )
       `)
-      .eq("donation_id", donation.id);
+      .eq("donation_id", donationId);
 
     const packages = (pkgRows ?? []).map((row: any) => ({
       id:         row.packages.id,
       quantity:   row.packages.quantity,
-      status:     row.packages.status,
+      status:     row.packages.status, // now 'delivered'
       created_at: row.packages.created_at,
       label_code: row.packages.label_code,
       expires_at: row.packages.expires_at,
-      item:       row.packages.items,
+      item: {
+        id:          row.packages.items?.id,
+        name:        row.packages.items?.name,
+        description: row.packages.items?.description,
+        unit:        row.packages.items?.unit,
+      },
     }));
 
-    /* ---------- Response ------------------------------------------ */
+    /* ---------- 3) Fetch donation summary for response ------------ */
+    const { data: donationRow } = await supaUser
+      .from("donations")
+      .select("id, status, created_at, released_at")
+      .eq("id", donationId)
+      .single();
+
+    /* ---------- 4) Response (same contract) ----------------------- */
     return new Response(JSON.stringify({
-      donation_id: donation.id,
-      status:      donation.status,
-      created_at:  donation.created_at,
-      released_at: donation.released_at,
+      donation_id: donationRow?.id,
+      status:      donationRow?.status,      // 'picked_up'
+      created_at:  donationRow?.created_at,
+      released_at: donationRow?.released_at,
       restaurant:  rest?.name ?? null,
       osc:         osc?.name  ?? null,
       packages,
@@ -118,10 +146,4 @@ const handler = async (req: Request): Promise<Response> => {
 };
 
 /* ──────────────── Router (único serve) ──────────────── */
-serve({
-  "/restaurant_release_donation": handler,
-});
-
-/* Endpoint final:
-   POST https://<project>.supabase.co/functions/v1/restaurant_release_donation
-*/
+serve({ "/restaurant_release_donation": handler });
