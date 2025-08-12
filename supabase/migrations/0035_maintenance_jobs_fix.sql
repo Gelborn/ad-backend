@@ -1,5 +1,4 @@
--- 0034_maintenance_jobs.sql
-BEGIN;
+-- 0035_maintenance_jobs_fix.sql
 
 -- Extensions we rely on
 CREATE EXTENSION IF NOT EXISTS pgcrypto;  -- gen_random_uuid
@@ -15,9 +14,6 @@ CREATE INDEX IF NOT EXISTS idx_packages_status_expires
 
 -- -----------------------------------------------------------------------------
 -- Helper: fetch config from Vault if available, else DB setting (app.*)
--- Expects secrets named:
---   - functions_base_url
---   - functions_internal_key
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.app_get_setting(p_name text)
 RETURNS text
@@ -27,7 +23,6 @@ DECLARE
   v_val text;
   has_vault boolean;
 BEGIN
-  -- Try Supabase Vault first (if available)
   has_vault := to_regproc('vault.get_secret(text)') IS NOT NULL;
   IF has_vault THEN
     BEGIN
@@ -36,12 +31,10 @@ BEGIN
         RETURN v_val;
       END IF;
     EXCEPTION WHEN OTHERS THEN
-      -- ignore and fall back
       v_val := NULL;
     END;
   END IF;
 
-  -- Fallback: PostgreSQL setting e.g. ALTER DATABASE ... SET app.functions_base_url='...'
   BEGIN
     RETURN current_setting('app.' || p_name, true);
   EXCEPTION WHEN OTHERS THEN
@@ -52,7 +45,6 @@ $$;
 
 COMMENT ON FUNCTION public.app_get_setting(text)
   IS 'Returns a secret/config by trying Supabase Vault (vault.get_secret) first, else current_setting(app.*).';
-
 
 -- =============================================================================
 -- A) RPC: expire a specific waiting intent, try plan‑B reroute, notify.
@@ -138,9 +130,9 @@ BEGIN
            )
        AND NOT EXISTS (
              SELECT 1
-               FROM public.donation_packages dp2
-              WHERE dp2.package_id = p.id
-                AND dp2.unlinked_at IS NULL
+              FROM public.donation_packages dp2
+             WHERE dp2.package_id = p.id
+               AND dp2.unlinked_at IS NULL
            );
 
     -- Close any remaining waiters defensively
@@ -176,14 +168,13 @@ BEGIN
                    ),
         body    := jsonb_build_object('security_code', v_new_code)::text
       );
-    -- Ignore notify failures for now (keep flow robust)
+    -- Ignore notify failures for now
   END IF;
 END;
 $$;
 
 COMMENT ON FUNCTION public.expire_and_reroute(text)
   IS 'Expires a waiting intent, attempts Plan B and notifies. If none available → denies donation, unlinks, and restocks packages.';
-
 
 -- =============================================================================
 -- B) Batch: expire all overdue intents (calls A)
@@ -210,7 +201,7 @@ BEGIN
       PERFORM public.expire_and_reroute(r.security_code);
       v_count := v_count + 1;
     EXCEPTION WHEN OTHERS THEN
-      CONTINUE; -- keep batch resilient
+      CONTINUE;
     END;
   END LOOP;
 
@@ -221,9 +212,8 @@ $$;
 COMMENT ON FUNCTION public.expire_waiting_donation_intents()
   IS 'Batch: finds overdue waiting intents and runs expire_and_reroute() for each. Returns count processed.';
 
-
 -- =============================================================================
--- C) Deny donations that crossed pickup deadline + release packages  (FIXED VIA CTE)
+-- C) Deny donations that crossed pickup deadline + release packages
 -- =============================================================================
 CREATE OR REPLACE FUNCTION public.deny_donations_past_pickup_deadline()
 RETURNS TABLE(donations_denied integer, packages_released integer)
@@ -234,7 +224,6 @@ DECLARE
   v_ids uuid[];
   v_released integer := 0;
 BEGIN
-  -- Flip donations to 'denied' and collect their ids (use CTE, not UPDATE-in-FROM)
   WITH updated AS (
     UPDATE public.donations d
        SET status = 'denied',
@@ -254,13 +243,11 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Unlink active package associations (keep history)
   UPDATE public.donation_packages
      SET unlinked_at = v_now
    WHERE donation_id = ANY (v_ids)
      AND unlinked_at IS NULL;
 
-  -- Restock packages that are no longer linked anywhere (race-safe)
   UPDATE public.packages p
      SET status = 'in_stock',
          updated_at = v_now
@@ -286,7 +273,6 @@ $$;
 
 COMMENT ON FUNCTION public.deny_donations_past_pickup_deadline()
   IS 'Sets donations to denied when past pickup_deadline_at; unlinks and safely restocks packages. Returns counts.';
-
 
 -- =============================================================================
 -- D) Discard packages that expired (only if currently in_stock)
@@ -314,12 +300,9 @@ $$;
 COMMENT ON FUNCTION public.discard_expired_instock_packages()
   IS 'Marks packages as discarded when past expires_at AND status is in_stock. Returns rows affected.';
 
-
 -- =============================================================================
 -- E) pg_cron schedules (idempotent; no-ops if pg_cron is missing)
 -- =============================================================================
-
--- Try to enable pg_cron (safe if already present; installed under schema "cron")
 CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA cron;
 
 DO $$
@@ -334,7 +317,6 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Overdue intents: every 5 minutes → calls the BATCH function
   IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'expire-and-reroute-intents') THEN
     PERFORM cron.schedule(
       'expire-and-reroute-intents',
@@ -343,7 +325,6 @@ BEGIN
     );
   END IF;
 
-  -- Donations past pickup deadline: every 15 minutes
   IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'deny-pickup-deadlines') THEN
     PERFORM cron.schedule(
       'deny-pickup-deadlines',
@@ -352,7 +333,6 @@ BEGIN
     );
   END IF;
 
-  -- Discard expired packages: HOURLY (as you asked)
   IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'discard-expired-packages-hourly') THEN
     PERFORM cron.schedule(
       'discard-expired-packages-hourly',
@@ -362,3 +342,6 @@ BEGIN
   END IF;
 END
 $$;
+
+-- (Optional) If you insist on explicit transaction control, add:
+-- COMMIT;
