@@ -11,7 +11,7 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_REF:          ${{ secrets.SUPABASE_REF }}
-      # Build an explicit DB URL so the CLI knows EXACTLY where to push:
+      # Explicit DB URL so the CLI targets the right Postgres:
       SUPABASE_DB_URL: postgresql://postgres:${{ secrets.SUPABASE_DB_PASSWORD }}@db.${{ secrets.SUPABASE_REF }}.supabase.co:5432/postgres
 
     steps:
@@ -23,39 +23,53 @@ jobs:
         with:
           version: latest
 
-      # (Optional) Show where the CLI is pointing
       - name: Print Supabase env
         run: |
           echo "Project ref: $SUPABASE_REF"
           echo "DB host: db.$SUPABASE_REF.supabase.co"
 
-      # Link (writes .supabase/config.toml for function deploys, etc.)
       - name: Link project
         run: |
           supabase link \
             --project-ref "$SUPABASE_REF" \
             --password    "$SUPABASE_DB_PASSWORD"
 
-      # Migrations — NON-INTERACTIVE and with explicit DB URL
+      # ✅ Push migrations without prompts; include any not on remote history
       - name: Push migrations (non-interactive, explicit DB URL)
         run: |
           supabase db push \
-            --non-interactive \
+            --yes \
+            --include-all \
             --db-url "$SUPABASE_DB_URL" \
             --debug
 
-      # Quick verification from CI that the DB really changed (list the last few entries)
+      # Verify: show recent migrations & ensure our maintenance functions exist
       - name: Verify migrations applied
         run: |
           sudo apt-get update && sudo apt-get install -y postgresql-client
+          echo "---- Recent migrations ----"
           psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 -c "
             select version, name, executed_at
             from supabase_migrations.schema_migrations
             order by executed_at desc
-            limit 10;
+            limit 15;
+          "
+          echo "---- Check maintenance functions ----"
+          psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 -c "
+            select n.nspname as schema, p.proname as function
+            from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public'
+              and p.proname in (
+                'app_get_setting',
+                'expire_and_reroute',
+                'expire_waiting_donation_intents',
+                'deny_donations_past_pickup_deadline',
+                'discard_expired_instock_packages'
+              )
+            order by function;
           "
 
-      # Deploy private Edge Functions
       - name: Deploy private Edge Functions
         run: |
           private_fns=(
@@ -74,8 +88,7 @@ jobs:
               --import-map supabase/functions/import_map.json
           done
 
-      # Deploy public Edge Functions (no-verify-jwt)
-      - name: Deploy public Edge Functions
+      - name: Deploy public Edge Functions (no-verify-jwt)
         run: |
           public_fns=(
             util_cep_info
