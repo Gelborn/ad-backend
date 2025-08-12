@@ -72,9 +72,8 @@ const handler = async (req: Request): Promise<Response> => {
     // If the intent exists and code changed, notify the new OSC
     if (newIntent.security_code && newIntent.security_code !== security_code) {
       try {
-        await supa.functions.invoke("util_send_notifications", {
-          body: { security_code: newIntent.security_code },
-          headers: { apikey: SRV_KEY },
+        await supaAdmin.functions.invoke("send_notifications", {
+          body: { security_code },
         });
       } catch (notifyErr) {
         // We don't fail the deny flow on email issues; just log
