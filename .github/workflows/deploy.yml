@@ -45,7 +45,6 @@ jobs:
             cf_update_favorite
             restaurant_create_donation
             restaurant_release_donation
-            util_send_notifications
           )
           for fn in "${private_fns[@]}"; do
             echo "🔐 Deploying $fn"
@@ -62,6 +61,7 @@ jobs:
             osc_accept_donation
             osc_deny_donation
             osc_get_donation_details
+            util_send_notifications
           )
           for fn in "${public_fns[@]}"; do
             echo "🌐 Deploying $fn (no-verify-jwt)"

@@ -74,7 +74,7 @@ const handler = async (req: Request): Promise<Response> => {
       try {
         await supaAdmin.functions.invoke("util_send_notifications", {
           body: { security_code },
-          headers: { Authorization: `Bearer ${SRV_KEY}` },
+          headers: { "x-internal-key": Deno.env.get("FUNCTIONS_INTERNAL_KEY")! },
         });
       } catch (notifyErr) {
         // We don't fail the deny flow on email issues; just log
