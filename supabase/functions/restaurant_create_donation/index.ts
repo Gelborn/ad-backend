@@ -87,8 +87,12 @@ const handler = async (req: Request): Promise<Response> => {
 
     /* ---------- Notificação --------------------------------------- */
     try {
-      await supaAdmin.functions.invoke("send_notifications", {
+      await supaAdmin.functions.invoke("util_send_notifications", {
         body: { security_code },
+        headers: {
+          Authorization: `Bearer ${SRV_KEY}`,
+          apikey: SRV_KEY,
+        },
       });
       console.log("Notifications invoked");
     } catch (notifyErr) {
