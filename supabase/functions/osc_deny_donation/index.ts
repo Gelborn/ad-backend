@@ -72,7 +72,7 @@ const handler = async (req: Request): Promise<Response> => {
     // If the intent exists and code changed, notify the new OSC
     if (newIntent.security_code && newIntent.security_code !== security_code) {
       try {
-        await supaAdmin.functions.invoke("util_send_notifications", {
+        await supa.functions.invoke("util_send_notifications", {
           body: { security_code },
           headers: { "x-internal-key": Deno.env.get("FUNCTIONS_INTERNAL_KEY")! },
         });
