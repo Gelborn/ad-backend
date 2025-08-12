@@ -87,13 +87,15 @@ const handler = async (req: Request): Promise<Response> => {
 
     /* ---------- Notificação --------------------------------------- */
     try {
-      await supaAdmin.functions.invoke("util_send_notifications", {
-        body: { security_code },
-        headers: {
-          Authorization: `Bearer ${SRV_KEY}`,
-          apikey: SRV_KEY,
-        },
-      });
+      // direct call → avoids SDK header quirks
+      await fetch(`${SUPABASE_URL}/functions/v1/util_send_notifications`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SRV_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ security_code }),
+    });
       console.log("Notifications invoked");
     } catch (notifyErr) {
       console.error("Notification invoke failed:", notifyErr);
