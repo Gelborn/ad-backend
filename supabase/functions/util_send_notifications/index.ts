@@ -1,40 +1,52 @@
-// supabase/functions/send_notifications/index.ts
+// supabase/functions/util_send_notifications/index.ts
 import { serve } from "https://deno.land/x/sift@0.6.0/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const SUPA_URL     = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_KEY  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const APP_URL      = Deno.env.get("APP_URL")!;
-const RESEND_KEY   = Deno.env.get("RESEND_API_KEY")!;
-const MAIL_FROM    = Deno.env.get("MAIL_FROM")!;
+const SUPA_URL    = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const APP_URL     = Deno.env.get("APP_URL")!;
 
-// Rota do front para aceite/recusa
+const BREVO_KEY   = Deno.env.get("BREVO_API_KEY")!;      // <-- Brevo API key
+const MAIL_FROM   = Deno.env.get("MAIL_FROM")!;          // <-- verified sender email in Brevo
+const FROM_NAME   = Deno.env.get("MAIL_FROM_NAME") ?? "Connecting Food";
+
+// Front route for accept/deny
 const CONFIRM_PATH = "/confirm-donation";
 
 type IntentStatus = "waiting_response" | "accepted" | "denied" | "expired" | "re_routed";
 
 function ensureEnv() {
-  if (!RESEND_KEY) throw new Error("Missing RESEND_API_KEY");
-  if (!MAIL_FROM)  throw new Error("Missing MAIL_FROM");
+  if (!BREVO_KEY) throw new Error("Missing BREVO_API_KEY");
+  if (!MAIL_FROM) throw new Error("Missing MAIL_FROM");
 }
 
 async function sendEmail({
   to, subject, html, text,
 }: { to: string; subject: string; html: string; text: string }) {
-  const res = await fetch("https://api.resend.com/emails", {
+  const payload = {
+    sender: { email: MAIL_FROM, name: FROM_NAME },
+    to: [{ email: to }],
+    subject,
+    htmlContent: html,
+    textContent: text,
+  };
+
+  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${RESEND_KEY}`,
+      "api-key": BREVO_KEY,
       "Content-Type": "application/json",
+      "accept": "application/json",
     },
-    body: JSON.stringify({ from: MAIL_FROM, to, subject, html, text }),
+    body: JSON.stringify(payload),
   });
-  const body = await res.text();
+
+  const bodyTxt = await res.text();
   if (!res.ok) {
-    console.error("❌ Resend error:", res.status, body);
+    console.error("❌ Brevo error:", res.status, bodyTxt);
     throw new Error("EMAIL_SEND_FAILED");
   }
-  console.log("✅ Email queued:", body);
+  console.log("✅ Email queued (Brevo):", bodyTxt);
 }
 
 function emailTemplateSimple(params: {
@@ -94,7 +106,7 @@ serve({
     try { body = await req.json(); }
     catch { return new Response("Invalid JSON", { status: 400 }); }
 
-    const { security_code, resend } = body || {};
+    const { security_code } = body || {};
     if (!security_code) return new Response("Missing security_code", { status: 400 });
 
     try { ensureEnv(); }
@@ -122,7 +134,7 @@ serve({
       return new Response("Donation intent not found", { status: 404 });
     }
 
-    // Só envia enquanto waiting_response (tanto 1º envio quanto reenvio)
+    // Só envia enquanto waiting_response
     if (intent.status !== "waiting_response") {
       return new Response("Intent not in waiting_response", { status: 409 });
     }
