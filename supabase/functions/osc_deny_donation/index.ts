@@ -5,6 +5,7 @@ import { handleCors, corsHeaders } from "$lib/cors.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SRV_KEY      = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const INTERNAL_KEY = Deno.env.get("FUNCTIONS_INTERNAL_KEY")!; // same secret you used in util_send_notifications
 
 const supa = createClient(SUPABASE_URL, SRV_KEY);
 
@@ -20,13 +21,13 @@ const handler = async (req: Request): Promise<Response> => {
     return new Response("Invalid JSON", { status: 400, headers: corsHeaders(req.headers.get("origin")) });
   }
 
-  const { security_code } = body;
+  const { security_code } = body ?? {};
   if (!security_code) {
     return new Response("Missing security_code", { status: 400, headers: corsHeaders(req.headers.get("origin")) });
   }
 
   try {
-    // 1) Find the open intent to anchor the donation_id (before RPC changes things)
+    // 1) Anchor donation_id before RPC
     const { data: currentIntent, error: iErr } = await supa
       .from("donation_intents")
       .select("donation_id, status")
@@ -42,7 +43,7 @@ const handler = async (req: Request): Promise<Response> => {
 
     const donationId = currentIntent.donation_id as string;
 
-    // 2) Execute deny + optional reroute
+    // 2) Deny + (maybe) reroute
     const { error: rpcErr } = await supa.rpc("osc_deny_and_reroute", { p_security_code: security_code });
     if (rpcErr) {
       if (rpcErr.message?.includes("DONATION_NOT_FOUND_OR_NOT_PENDING")) {
@@ -54,7 +55,7 @@ const handler = async (req: Request): Promise<Response> => {
       throw rpcErr;
     }
 
-    // 3) Check if there is a new 'waiting_response' intent for the same donation (rerouted)
+    // 3) Check for the new waiting intent (rerouted)
     const { data: newIntent, error: nErr } = await supa
       .from("donation_intents")
       .select("security_code, status, created_at")
@@ -64,27 +65,30 @@ const handler = async (req: Request): Promise<Response> => {
       .limit(1)
       .maybeSingle();
 
-    // If there’s no open intent now, it means donation was closed (denied/no reroute) → 204
+    // No open intent now → donation was closed; just finish
     if (nErr || !newIntent) {
       return new Response(null, { status: 204, headers: corsHeaders(req.headers.get("origin")) });
     }
 
-    // If the intent exists and code changed, notify the new OSC
+    // 4) Notify the **new** OSC with the **new** code
     if (newIntent.security_code && newIntent.security_code !== security_code) {
       try {
-        await supa.functions.invoke("util_send_notifications", {
-          body: { security_code },
-          headers: { "x-internal-key": Deno.env.get("FUNCTIONS_INTERNAL_KEY")! },
+        await fetch(`${SUPABASE_URL}/functions/v1/util_send_notifications`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-internal-key": INTERNAL_KEY,                     // internal guard
+            // If util_send_notifications was NOT deployed with --no-verify-jwt, also include a JWT:
+            // "Authorization": `Bearer ${Deno.env.get("SUPABASE_ANON_KEY")!}`,
+          },
+          body: JSON.stringify({ security_code: newIntent.security_code }), // 👈 use NEW code
         });
       } catch (notifyErr) {
-        // We don't fail the deny flow on email issues; just log
         console.error("osc_deny_donation: notify rerouted intent failed:", notifyErr);
       }
     }
 
-    // Same as before: no body
     return new Response(null, { status: 204, headers: corsHeaders(req.headers.get("origin")) });
-
   } catch (err: any) {
     console.error("osc_deny_donation ERROR:", err);
     return new Response(
@@ -94,4 +98,5 @@ const handler = async (req: Request): Promise<Response> => {
   }
 };
 
-serve({ "/osc_deny_donation": handler });
+// Map root + path (invoke-by-name hits "/")
+serve({ "/": handler, "/osc_deny_donation": handler });
