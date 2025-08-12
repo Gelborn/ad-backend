@@ -11,30 +11,51 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_REF:          ${{ secrets.SUPABASE_REF }}
+      # Build an explicit DB URL so the CLI knows EXACTLY where to push:
+      SUPABASE_DB_URL: postgresql://postgres:${{ secrets.SUPABASE_DB_PASSWORD }}@db.${{ secrets.SUPABASE_REF }}.supabase.co:5432/postgres
 
     steps:
-      # 1 — Checkout
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # 2 — CLI
-      - name: Install Supabase CLI
+      - name: Install Supabase CLI (latest)
         uses: supabase/setup-cli@v1
         with:
-          version: 2.33.9
+          version: latest
 
-      # 3 — Link project  (raiz)
+      # (Optional) Show where the CLI is pointing
+      - name: Print Supabase env
+        run: |
+          echo "Project ref: $SUPABASE_REF"
+          echo "DB host: db.$SUPABASE_REF.supabase.co"
+
+      # Link (writes .supabase/config.toml for function deploys, etc.)
       - name: Link project
         run: |
           supabase link \
             --project-ref "$SUPABASE_REF" \
             --password    "$SUPABASE_DB_PASSWORD"
 
-      # 4 — Migrations   (raiz → encontra supabase/migrations)
-      - name: Migrate database
-        run: supabase db push
+      # Migrations — NON-INTERACTIVE and with explicit DB URL
+      - name: Push migrations (non-interactive, explicit DB URL)
+        run: |
+          supabase db push \
+            --non-interactive \
+            --db-url "$SUPABASE_DB_URL" \
+            --debug
 
-      # 5a — Deploy private Edge Functions
+      # Quick verification from CI that the DB really changed (list the last few entries)
+      - name: Verify migrations applied
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+          psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 -c "
+            select version, name, executed_at
+            from supabase_migrations.schema_migrations
+            order by executed_at desc
+            limit 10;
+          "
+
+      # Deploy private Edge Functions
       - name: Deploy private Edge Functions
         run: |
           private_fns=(
@@ -53,7 +74,7 @@ jobs:
               --import-map supabase/functions/import_map.json
           done
 
-      # 5b — Deploy public Edge Functions (no-verify-jwt)
+      # Deploy public Edge Functions (no-verify-jwt)
       - name: Deploy public Edge Functions
         run: |
           public_fns=(
