@@ -1,69 +1,57 @@
 -- 0034_maintenance_jobs.sql
-BEGIN;
 
--- Extensions we rely on
-CREATE EXTENSION IF NOT EXISTS pgcrypto;  -- gen_random_uuid
-CREATE EXTENSION IF NOT EXISTS pg_net;    -- net.http_post (notify from DB)
+-- Ensure required extensions are present (no-ops if already there)
+create extension if not exists pgcrypto;
+create extension if not exists pg_net;
+create extension if not exists pg_cron with schema cron;
 
--- Helpful indexes (idempotent)
-CREATE INDEX IF NOT EXISTS idx_donation_intents_status_expires
-  ON public.donation_intents (status, expires_at);
-CREATE INDEX IF NOT EXISTS idx_donations_status_pickup_deadline
-  ON public.donations (status, pickup_deadline_at);
-CREATE INDEX IF NOT EXISTS idx_packages_status_expires
-  ON public.packages (status, expires_at);
+-- Drop first to force a net change
+drop function if exists public.expire_and_reroute(text) cascade;
+drop function if exists public.expire_waiting_donation_intents() cascade;
+drop function if exists public.deny_donations_past_pickup_deadline() cascade;
+drop function if exists public.discard_expired_instock_packages() cascade;
+drop function if exists public.app_get_setting(text) cascade;
 
--- -----------------------------------------------------------------------------
--- Helper: fetch config from Vault if available, else DB setting (app.*)
--- Expects secrets named:
---   - functions_base_url
---   - functions_internal_key
--- -----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.app_get_setting(p_name text)
-RETURNS text
-LANGUAGE plpgsql
-AS $$
-DECLARE
+-- Recreate helper
+create or replace function public.app_get_setting(p_name text)
+returns text
+language plpgsql
+as $$
+declare
   v_val text;
   has_vault boolean;
-BEGIN
-  -- Try Supabase Vault first (if available)
-  has_vault := to_regproc('vault.get_secret(text)') IS NOT NULL;
-  IF has_vault THEN
-    BEGIN
-      SELECT vault.get_secret(p_name) INTO v_val;
-      IF v_val IS NOT NULL AND v_val <> '' THEN
-        RETURN v_val;
-      END IF;
-    EXCEPTION WHEN OTHERS THEN
-      -- ignore and fall back
-      v_val := NULL;
-    END;
-  END IF;
+begin
+  has_vault := to_regproc('vault.get_secret(text)') is not null;
+  if has_vault then
+    begin
+      select vault.get_secret(p_name) into v_val;
+      if v_val is not null and v_val <> '' then
+        return v_val;
+      end if;
+    exception when others then
+      v_val := null;
+    end;
+  end if;
 
-  -- Fallback: PostgreSQL setting e.g. ALTER DATABASE ... SET app.functions_base_url='...'
-  BEGIN
-    RETURN current_setting('app.' || p_name, true);
-  EXCEPTION WHEN OTHERS THEN
-    RETURN NULL;
-  END;
-END;
+  begin
+    return current_setting('app.' || p_name, true);
+  exception when others then
+    return null;
+  end;
+end;
 $$;
 
-COMMENT ON FUNCTION public.app_get_setting(text)
-  IS 'Returns a secret/config by trying Supabase Vault (vault.get_secret) first, else current_setting(app.*).';
+comment on function public.app_get_setting(text)
+  is 'Returns a secret/config by trying Supabase Vault (vault.get_secret) first, else current_setting(app.*).';
 
-
--- =============================================================================
--- A) RPC: expire a specific waiting intent, try plan‑B reroute, notify.
--- =============================================================================
-CREATE OR REPLACE FUNCTION public.expire_and_reroute(p_security_code text)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-DECLARE
+-- A) expire_and_reroute
+create or replace function public.expire_and_reroute(p_security_code text)
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
   v_now           timestamptz := now();
   v_donation_id   uuid;
   v_restaurant_id uuid;
@@ -74,101 +62,94 @@ DECLARE
   v_base_url   text := public.app_get_setting('functions_base_url');
   v_internal   text := public.app_get_setting('functions_internal_key');
   v_resp       record;
-BEGIN
-  -- 1) Locate open intent + pending donation
-  SELECT di.donation_id, d.restaurant_id, di.osc_id
-    INTO v_donation_id, v_restaurant_id, v_old_osc_id
-  FROM public.donation_intents di
-  JOIN public.donations d ON d.id = di.donation_id
-  WHERE di.security_code = p_security_code
-    AND di.status = 'waiting_response'
-    AND d.status = 'pending'
-  LIMIT 1;
+begin
+  select di.donation_id, d.restaurant_id, di.osc_id
+    into v_donation_id, v_restaurant_id, v_old_osc_id
+  from public.donation_intents di
+  join public.donations d on d.id = di.donation_id
+  where di.security_code = p_security_code
+    and di.status = 'waiting_response'
+    and d.status = 'pending'
+  limit 1;
 
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'DONATION_NOT_FOUND_OR_NOT_PENDING';
-  END IF;
+  if not found then
+    raise exception 'DONATION_NOT_FOUND_OR_NOT_PENDING';
+  end if;
 
-  -- 2) Expire the current intent
-  UPDATE public.donation_intents
-     SET status = 'expired', updated_at = v_now
-   WHERE donation_id = v_donation_id
-     AND security_code = p_security_code
-     AND status = 'waiting_response';
+  update public.donation_intents
+     set status = 'expired', updated_at = v_now
+   where donation_id = v_donation_id
+     and security_code = p_security_code
+     and status = 'waiting_response';
 
-  -- 3) Try to pick another active OSC (favorite first; skip ones that denied/expired)
-  SELECT o.id
-    INTO v_new_osc_id
-  FROM public.partnerships pr
-  JOIN public.osc o ON o.id = pr.osc_id
-  WHERE pr.restaurant_id = v_restaurant_id
-    AND o.status = 'active'
-    AND o.id <> v_old_osc_id
-    AND NOT EXISTS (
-      SELECT 1
-      FROM public.donation_intents di2
-      WHERE di2.donation_id = v_donation_id
-        AND di2.osc_id = o.id
-        AND di2.status IN ('denied','expired')
+  select o.id
+    into v_new_osc_id
+  from public.partnerships pr
+  join public.osc o on o.id = pr.osc_id
+  where pr.restaurant_id = v_restaurant_id
+    and o.status = 'active'
+    and o.id <> v_old_osc_id
+    and not exists (
+      select 1
+      from public.donation_intents di2
+      where di2.donation_id = v_donation_id
+        and di2.osc_id = o.id
+        and di2.status in ('denied','expired')
     )
-  ORDER BY pr.is_favorite DESC, o.last_received_at NULLS FIRST
-  LIMIT 1;
+  order by pr.is_favorite desc, o.last_received_at nulls first
+  limit 1;
 
-  IF v_new_osc_id IS NULL THEN
-    -- No OSC available → donation fails (DENIED) + unlink + safe restock
-    UPDATE public.donations
-       SET status = 'denied',
+  if v_new_osc_id is null then
+    update public.donations
+       set status = 'denied',
            updated_at = v_now
-     WHERE id = v_donation_id
-       AND status = 'pending';
+     where id = v_donation_id
+       and status = 'pending';
 
-    UPDATE public.donation_packages
-       SET unlinked_at = v_now
-     WHERE donation_id = v_donation_id
-       AND unlinked_at IS NULL;
+    update public.donation_packages
+       set unlinked_at = v_now
+     where donation_id = v_donation_id
+       and unlinked_at is null;
 
-    UPDATE public.packages p
-       SET status = 'in_stock',
+    update public.packages p
+       set status = 'in_stock',
            updated_at = v_now
-     WHERE EXISTS (
-             SELECT 1
-               FROM public.donation_packages dp
-              WHERE dp.donation_id = v_donation_id
-                AND dp.package_id = p.id
+     where exists (
+             select 1
+               from public.donation_packages dp
+              where dp.donation_id = v_donation_id
+                and dp.package_id = p.id
            )
-       AND NOT EXISTS (
-             SELECT 1
-               FROM public.donation_packages dp2
-              WHERE dp2.package_id = p.id
-                AND dp2.unlinked_at IS NULL
+       and not exists (
+             select 1
+               from public.donation_packages dp2
+              where dp2.package_id = p.id
+                and dp2.unlinked_at is null
            );
 
-    -- Close any remaining waiters defensively
-    UPDATE public.donation_intents
-       SET status = 're_routed', updated_at = v_now
-     WHERE donation_id = v_donation_id
-       AND status = 'waiting_response';
+    update public.donation_intents
+       set status = 're_routed', updated_at = v_now
+     where donation_id = v_donation_id
+       and status = 'waiting_response';
 
-    RETURN;
-  END IF;
+    return;
+  end if;
 
-  -- 4) Re-route: keep donation pending, switch OSC + new code; create fresh intent (SLA 2 days)
   v_new_code := substring(gen_random_uuid()::text, 1, 6);
 
-  UPDATE public.donations
-     SET osc_id = v_new_osc_id,
+  update public.donations
+     set osc_id = v_new_osc_id,
          security_code = v_new_code
-   WHERE id = v_donation_id;
+   where id = v_donation_id;
 
-  INSERT INTO public.donation_intents
+  insert into public.donation_intents
          (donation_id, osc_id, security_code, status, created_at, expires_at)
-  VALUES (v_donation_id, v_new_osc_id, v_new_code, 'waiting_response', v_now, v_now + interval '2 days');
+  values (v_donation_id, v_new_osc_id, v_new_code, 'waiting_response', v_now, v_now + interval '2 days');
 
-  -- 5) Notify new OSC (if config is present)
-  IF coalesce(v_base_url, '') <> '' AND coalesce(v_internal, '') <> '' THEN
-    SELECT *
-      INTO v_resp
-      FROM net.http_post(
+  if coalesce(v_base_url, '') <> '' and coalesce(v_internal, '') <> '' then
+    select *
+      into v_resp
+      from net.http_post(
         url     := v_base_url || '/functions/v1/util_send_notifications',
         headers := jsonb_build_object(
                      'Content-Type','application/json',
@@ -176,189 +157,191 @@ BEGIN
                    ),
         body    := jsonb_build_object('security_code', v_new_code)::text
       );
-    -- Ignore notify failures for now (keep flow robust)
-  END IF;
-END;
+  end if;
+end;
 $$;
 
-COMMENT ON FUNCTION public.expire_and_reroute(text)
-  IS 'Expires a waiting intent, attempts Plan B and notifies. If none available → denies donation, unlinks, and restocks packages.';
+comment on function public.expire_and_reroute(text)
+  is 'Expires a waiting intent, attempts Plan B and notifies. If none available → denies donation, unlinks, and restocks packages.';
 
-
--- =============================================================================
--- B) Batch: expire all overdue intents (calls A)
--- =============================================================================
-CREATE OR REPLACE FUNCTION public.expire_waiting_donation_intents()
-RETURNS integer
-LANGUAGE plpgsql
-AS $$
-DECLARE
+-- B) batch
+create or replace function public.expire_waiting_donation_intents()
+returns integer
+language plpgsql
+as $$
+declare
   v_now timestamptz := now();
   v_count integer := 0;
   r record;
-BEGIN
-  FOR r IN
-    SELECT di.security_code
-      FROM public.donation_intents di
-      JOIN public.donations d ON d.id = di.donation_id
-     WHERE di.status = 'waiting_response'
-       AND di.expires_at IS NOT NULL
-       AND di.expires_at < v_now
-       AND d.status = 'pending'
-  LOOP
-    BEGIN
-      PERFORM public.expire_and_reroute(r.security_code);
+begin
+  for r in
+    select di.security_code
+      from public.donation_intents di
+      join public.donations d on d.id = di.donation_id
+     where di.status = 'waiting_response'
+       and di.expires_at is not null
+       and di.expires_at < v_now
+       and d.status = 'pending'
+  loop
+    begin
+      perform public.expire_and_reroute(r.security_code);
       v_count := v_count + 1;
-    EXCEPTION WHEN OTHERS THEN
-      CONTINUE; -- keep batch resilient
-    END;
-  END LOOP;
+    exception when others then
+      continue;
+    end;
+  end loop;
 
-  RETURN v_count;
-END;
+  return v_count;
+end;
 $$;
 
-COMMENT ON FUNCTION public.expire_waiting_donation_intents()
-  IS 'Batch: finds overdue waiting intents and runs expire_and_reroute() for each. Returns count processed.';
+comment on function public.expire_waiting_donation_intents()
+  is 'Batch: finds overdue waiting intents and runs expire_and_reroute() for each. Returns count processed.';
 
-
--- =============================================================================
--- C) Deny donations that crossed pickup deadline + release packages  (FIXED VIA CTE)
--- =============================================================================
-CREATE OR REPLACE FUNCTION public.deny_donations_past_pickup_deadline()
-RETURNS TABLE(donations_denied integer, packages_released integer)
-LANGUAGE plpgsql
-AS $$
-DECLARE
+-- C) deadlines
+create or replace function public.deny_donations_past_pickup_deadline()
+returns table(donations_denied integer, packages_released integer)
+language plpgsql
+as $$
+declare
   v_now timestamptz := now();
   v_ids uuid[];
   v_released integer := 0;
-BEGIN
-  -- Flip donations to 'denied' and collect their ids (use CTE, not UPDATE-in-FROM)
-  WITH updated AS (
-    UPDATE public.donations d
-       SET status = 'denied',
+begin
+  with updated as (
+    update public.donations d
+       set status = 'denied',
            updated_at = v_now
-     WHERE d.status = 'accepted'
-       AND d.pickup_deadline_at IS NOT NULL
-       AND d.pickup_deadline_at < v_now
-     RETURNING d.id
+     where d.status = 'accepted'
+       and d.pickup_deadline_at is not null
+       and d.pickup_deadline_at < v_now
+     returning d.id
   )
-  SELECT coalesce(array_agg(id), '{}') INTO v_ids FROM updated;
+  select coalesce(array_agg(id), '{}') into v_ids from updated;
 
   donations_denied := coalesce(array_length(v_ids, 1), 0);
 
-  IF donations_denied = 0 THEN
+  if donations_denied = 0 then
     packages_released := 0;
-    RETURN NEXT;
-    RETURN;
-  END IF;
+    return next;
+    return;
+  end if;
 
-  -- Unlink active package associations (keep history)
-  UPDATE public.donation_packages
-     SET unlinked_at = v_now
-   WHERE donation_id = ANY (v_ids)
-     AND unlinked_at IS NULL;
+  update public.donation_packages
+     set unlinked_at = v_now
+   where donation_id = any (v_ids)
+     and unlinked_at is null;
 
-  -- Restock packages that are no longer linked anywhere (race-safe)
-  UPDATE public.packages p
-     SET status = 'in_stock',
+  update public.packages p
+     set status = 'in_stock',
          updated_at = v_now
-   WHERE EXISTS (
-           SELECT 1
-             FROM public.donation_packages dp
-            WHERE dp.donation_id = ANY (v_ids)
-              AND dp.package_id = p.id
+   where exists (
+           select 1
+             from public.donation_packages dp
+            where dp.donation_id = any (v_ids)
+              and dp.package_id = p.id
          )
-     AND NOT EXISTS (
-           SELECT 1
-             FROM public.donation_packages dp2
-            WHERE dp2.package_id = p.id
-              AND dp2.unlinked_at IS NULL
+     and not exists (
+           select 1
+             from public.donation_packages dp2
+            where dp2.package_id = p.id
+              and dp2.unlinked_at is null
          );
 
-  GET DIAGNOSTICS v_released = ROW_COUNT;
+  get diagnostics v_released = row_count;
   packages_released := v_released;
 
-  RETURN NEXT;
-END;
+  return next;
+end;
 $$;
 
-COMMENT ON FUNCTION public.deny_donations_past_pickup_deadline()
-  IS 'Sets donations to denied when past pickup_deadline_at; unlinks and safely restocks packages. Returns counts.';
+comment on function public.deny_donations_past_pickup_deadline()
+  is 'Sets donations to denied when past pickup_deadline_at; unlinks and safely restocks packages. Returns counts.';
 
-
--- =============================================================================
--- D) Discard packages that expired (only if currently in_stock)
--- =============================================================================
-CREATE OR REPLACE FUNCTION public.discard_expired_instock_packages()
-RETURNS integer
-LANGUAGE plpgsql
-AS $$
-DECLARE
+-- D) discard expired in_stock packages
+create or replace function public.discard_expired_instock_packages()
+returns integer
+language plpgsql
+as $$
+declare
   v_now timestamptz := now();
   v_count integer;
-BEGIN
-  UPDATE public.packages p
-     SET status = 'discarded',
+begin
+  update public.packages p
+     set status = 'discarded',
          updated_at = v_now
-   WHERE p.status = 'in_stock'
-     AND p.expires_at IS NOT NULL
-     AND p.expires_at < v_now;
+   where p.status = 'in_stock'
+     and p.expires_at is not null
+     and p.expires_at < v_now;
 
-  GET DIAGNOSTICS v_count = ROW_COUNT;
-  RETURN v_count;
-END;
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
 $$;
 
-COMMENT ON FUNCTION public.discard_expired_instock_packages()
-  IS 'Marks packages as discarded when past expires_at AND status is in_stock. Returns rows affected.';
+comment on function public.discard_expired_instock_packages()
+  is 'Marks packages as discarded when past expires_at AND status is in_stock. Returns rows affected.';
 
+-- Explicit grants (safe even if redundant in your setup)
+grant execute on function
+  public.app_get_setting(text),
+  public.expire_and_reroute(text),
+  public.expire_waiting_donation_intents(),
+  public.deny_donations_past_pickup_deadline(),
+  public.discard_expired_instock_packages()
+to anon, authenticated, service_role;
 
--- =============================================================================
--- E) pg_cron schedules (idempotent; no-ops if pg_cron is missing)
--- =============================================================================
+-- (Re)create helpful indexes (idempotent)
+create index if not exists idx_donation_intents_status_expires
+  on public.donation_intents (status, expires_at);
+create index if not exists idx_donations_status_pickup_deadline
+  on public.donations (status, pickup_deadline_at);
+create index if not exists idx_packages_status_expires
+  on public.packages (status, expires_at);
 
--- Try to enable pg_cron (safe if already present; installed under schema "cron")
-CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA cron;
-
-DO $$
-DECLARE
+-- Set up cron jobs if extension is present; log what happened
+do $$
+declare
   has_cron boolean;
-BEGIN
-  SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')
-    INTO has_cron;
+begin
+  select exists (select 1 from pg_extension where extname='pg_cron') into has_cron;
 
-  IF NOT has_cron THEN
-    RAISE NOTICE 'pg_cron not available on this instance; skipping cron setup.';
-    RETURN;
-  END IF;
+  if not has_cron then
+    raise notice 'pg_cron not available; skipping job setup.';
+    return;
+  end if;
 
-  -- Overdue intents: every 5 minutes → calls the BATCH function
-  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'expire-and-reroute-intents') THEN
-    PERFORM cron.schedule(
+  if not exists (select 1 from cron.job where jobname = 'expire-and-reroute-intents') then
+    perform cron.schedule(
       'expire-and-reroute-intents',
       '*/5 * * * *',
-      'SELECT public.expire_waiting_donation_intents();'
+      'select public.expire_waiting_donation_intents();'
     );
-  END IF;
+    raise notice 'Created cron job expire-and-reroute-intents.';
+  else
+    raise notice 'Cron job expire-and-reroute-intents already exists.';
+  end if;
 
-  -- Donations past pickup deadline: every 15 minutes
-  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'deny-pickup-deadlines') THEN
-    PERFORM cron.schedule(
+  if not exists (select 1 from cron.job where jobname = 'deny-pickup-deadlines') then
+    perform cron.schedule(
       'deny-pickup-deadlines',
       '*/15 * * * *',
-      'SELECT * FROM public.deny_donations_past_pickup_deadline();'
+      'select * from public.deny_donations_past_pickup_deadline();'
     );
-  END IF;
+    raise notice 'Created cron job deny-pickup-deadlines.';
+  else
+    raise notice 'Cron job deny-pickup-deadlines already exists.';
+  end if;
 
-  -- Discard expired packages: HOURLY (as you asked)
-  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'discard-expired-packages-hourly') THEN
-    PERFORM cron.schedule(
+  if not exists (select 1 from cron.job where jobname = 'discard-expired-packages-hourly') then
+    perform cron.schedule(
       'discard-expired-packages-hourly',
       '0 * * * *',
-      'SELECT public.discard_expired_instock_packages();'
+      'select public.discard_expired_instock_packages();'
     );
-  END IF;
-END
+    raise notice 'Created cron job discard-expired-packages-hourly.';
+  else
+    raise notice 'Cron job discard-expired-packages-hourly already exists.';
+  end if;
+end
 $$;
