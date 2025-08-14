@@ -20,12 +20,11 @@ function normalizeCnpj(input?: string | null): string | null {
   if (cleaned === "") return null;
   const digits = cleaned.replace(/\D/g, "");
   if (digits.length !== 14) {
-    throw Object.assign(new Error("CNPJ deve conter 14 dígitos"), {
-      status: 422,
-      code: "INVALID_CNPJ",
-    });
+    const e: any = new Error("CNPJ deve conter 14 dígitos");
+    e.status = 422; e.code = "INVALID_CNPJ";
+    throw e;
   }
-  return digits; // armazenamos apenas dígitos para garantir unicidade
+  return digits; // armazenamos só dígitos p/ garantir unicidade
 }
 
 function normalizeCode(input?: string | null): string | null {
@@ -80,12 +79,11 @@ const handler = async (req: Request): Promise<Response> => {
       code: codeRaw,
     } = body;
 
-    // log object
-    console.log("body", body);
-
     const emailLc = (emailOwner as string).trim().toLowerCase();
 
-    if (!validateCep(cep)) {
+    /* ─── Normaliza e valida CEP ─── */
+    const cepDigits = String(cep ?? "").replace(/\D/g, "");
+    if (!validateCep(cepDigits)) {
       return new Response(
         JSON.stringify({ code: "INVALID_CEP", message: "CEP inválido" }),
         { status: 422, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
@@ -106,7 +104,7 @@ const handler = async (req: Request): Promise<Response> => {
       );
     }
 
-    /* ─── 0) Verifica email duplicado em restaurants ─── */
+    /* ─── 0) Verifica email duplicado ─── */
     {
       const { data: existing, error: dupErr } = await supaAdmin
         .from("restaurants")
@@ -191,9 +189,7 @@ const handler = async (req: Request): Promise<Response> => {
     }
 
     const ownerId = newUser.user?.id;
-    if (!ownerId) {
-      throw new Error("Falha ao criar usuário");
-    }
+    if (!ownerId) throw new Error("Falha ao criar usuário");
 
     /* ─── 2) Gera & envia magic-link ─── */
     try {
@@ -209,8 +205,8 @@ const handler = async (req: Request): Promise<Response> => {
       );
     }
 
-    /* ─── 3) Geocoding ─── */
-    const geo = await geocodeByCep(cep, number);
+    /* ─── 3) Geocoding (usar CEP normalizado) ─── */
+    const geo = await geocodeByCep(cepDigits, number);
 
     /* ─── 4) Insere restaurante ─── */
     const insertPayload: any = {
@@ -221,13 +217,13 @@ const handler = async (req: Request): Promise<Response> => {
       number,
       city:    city  ?? geo.city,
       uf:      uf    ?? geo.uf,
-      cep,
+      cep:     cepDigits,
       lat:     geo.lat,
       lng:     geo.lng,
       status:  "active",
       user_id: ownerId,
     };
-    if (cnpj) insertPayload.cnpj = cnpj; // já normalizado (14 dígitos)
+    if (cnpj) insertPayload.cnpj = cnpj;
     if (code) insertPayload.code = code;
 
     const { data: restaurant, error: restErr } = await supaUser
@@ -237,7 +233,6 @@ const handler = async (req: Request): Promise<Response> => {
       .single();
 
     if (restErr) {
-      // Tratamento amigável para violação de unicidade
       if ((restErr as any).code === "23505") {
         const msg = (restErr.message ?? "").toLowerCase();
         if (msg.includes("restaurants_cnpj_key") || msg.includes("(cnpj)")) {
@@ -262,13 +257,9 @@ const handler = async (req: Request): Promise<Response> => {
       .from("restaurant_users")
       .upsert({ user_id: ownerId, restaurant_id: restaurant.id, role: "owner" });
 
-    /* ─── Sucesso ─── */
     return new Response(
       JSON.stringify({ id: restaurant.id }),
-      {
-        status: 201,
-        headers: { ...corsHeaders(origin), "Content-Type": "application/json" },
-      }
+      { status: 201, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
     );
 
   } catch (err: any) {
@@ -277,10 +268,7 @@ const handler = async (req: Request): Promise<Response> => {
     const code   = err.code   ?? "INTERNAL_ERROR";
     return new Response(
       JSON.stringify({ code, message: err.message ?? "Erro interno" }),
-      {
-        status,
-        headers: { ...corsHeaders(req.headers.get("origin") ?? undefined), "Content-Type": "application/json" },
-      }
+      { status, headers: { ...corsHeaders(req.headers.get("origin") ?? undefined), "Content-Type": "application/json" } }
     );
   }
 };
