@@ -13,6 +13,27 @@ const ANON_KEY     = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SRV_KEY      = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const APP_URL      = Deno.env.get("APP_URL")!;
 
+/* Helpers */
+function normalizeCnpj(input?: string | null): string | null {
+  if (!input) return null;
+  const cleaned = input.trim();
+  if (cleaned === "") return null;
+  const digits = cleaned.replace(/\D/g, "");
+  if (digits.length !== 14) {
+    throw Object.assign(new Error("CNPJ deve conter 14 dígitos"), {
+      status: 422,
+      code: "INVALID_CNPJ",
+    });
+  }
+  return digits; // armazenamos apenas dígitos para garantir unicidade
+}
+
+function normalizeCode(input?: string | null): string | null {
+  if (!input) return null;
+  const cleaned = input.trim();
+  return cleaned === "" ? null : cleaned;
+}
+
 /* ──────────────── Handler ──────────────── */
 const handler = async (req: Request): Promise<Response> => {
   const cors = handleCors(req);
@@ -45,13 +66,40 @@ const handler = async (req: Request): Promise<Response> => {
     }
 
     /* ---------- Body ---------- */
-    const { name, emailOwner, cep, number, street, city, uf, phone } = await req.json();
+    const body = await req.json();
+    const {
+      name,
+      emailOwner,
+      cep,
+      number,
+      street,
+      city,
+      uf,
+      phone,
+      cnpj: cnpjRaw,
+      code: codeRaw,
+    } = body;
+
     const emailLc = (emailOwner as string).trim().toLowerCase();
 
     if (!validateCep(cep)) {
       return new Response(
         JSON.stringify({ code: "INVALID_CEP", message: "CEP inválido" }),
         { status: 422, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
+      );
+    }
+
+    /* ─── Validar/normalizar CNPJ & Code (opcionais) ─── */
+    let cnpj: string | null = null;
+    let code: string | null = null;
+    try {
+      cnpj = normalizeCnpj(cnpjRaw);
+      code = normalizeCode(codeRaw);
+    } catch (valErr: any) {
+      const status = valErr.status ?? 422;
+      return new Response(
+        JSON.stringify({ code: valErr.code ?? "INVALID_INPUT", message: valErr.message }),
+        { status, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
       );
     }
 
@@ -74,6 +122,54 @@ const handler = async (req: Request): Promise<Response> => {
       if (existing) {
         return new Response(
           JSON.stringify({ code: "EMAIL_ALREADY_EXISTS", message: "Restaurante com esse e-mail já existe" }),
+          { status: 409, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    /* ─── 0.1) Verifica CNPJ duplicado (se enviado) ─── */
+    if (cnpj) {
+      const { data: existingCnpj, error: cnpjErr } = await supaAdmin
+        .from("restaurants")
+        .select("id")
+        .eq("cnpj", cnpj)
+        .limit(1)
+        .maybeSingle();
+
+      if (cnpjErr) {
+        console.error("Erro validando duplicação de CNPJ:", cnpjErr);
+        return new Response(
+          JSON.stringify({ code: "CNPJ_CHECK_ERROR", message: cnpjErr.message }),
+          { status: 500, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
+        );
+      }
+      if (existingCnpj) {
+        return new Response(
+          JSON.stringify({ code: "CNPJ_ALREADY_EXISTS", message: "Já existe restaurante com este CNPJ" }),
+          { status: 409, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    /* ─── 0.2) Verifica CODE duplicado (se enviado) ─── */
+    if (code) {
+      const { data: existingCode, error: codeErr } = await supaAdmin
+        .from("restaurants")
+        .select("id")
+        .eq("code", code)
+        .limit(1)
+        .maybeSingle();
+
+      if (codeErr) {
+        console.error("Erro validando duplicação de code:", codeErr);
+        return new Response(
+          JSON.stringify({ code: "CODE_CHECK_ERROR", message: codeErr.message }),
+          { status: 500, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
+        );
+      }
+      if (existingCode) {
+        return new Response(
+          JSON.stringify({ code: "CODE_ALREADY_EXISTS", message: "Já existe restaurante com este código" }),
           { status: 409, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
         );
       }
@@ -114,26 +210,46 @@ const handler = async (req: Request): Promise<Response> => {
     const geo = await geocodeByCep(cep, number);
 
     /* ─── 4) Insere restaurante ─── */
+    const insertPayload: any = {
+      name,
+      phone,
+      email:   emailLc,
+      street:  street ?? geo.street,
+      number,
+      city:    city  ?? geo.city,
+      uf:      uf    ?? geo.uf,
+      cep,
+      lat:     geo.lat,
+      lng:     geo.lng,
+      status:  "active",
+      user_id: ownerId,
+    };
+    if (cnpj) insertPayload.cnpj = cnpj; // já normalizado (14 dígitos)
+    if (code) insertPayload.code = code;
+
     const { data: restaurant, error: restErr } = await supaUser
       .from("restaurants")
-      .insert({
-        name,
-        phone,
-        email:   emailLc,
-        street:  street ?? geo.street,
-        number,
-        city:    city  ?? geo.city,
-        uf:      uf    ?? geo.uf,
-        cep,
-        lat:     geo.lat,
-        lng:     geo.lng,
-        status:  "active",
-        user_id: ownerId,
-      })
+      .insert(insertPayload)
       .select()
       .single();
 
     if (restErr) {
+      // Tratamento amigável para violação de unicidade
+      if ((restErr as any).code === "23505") {
+        const msg = (restErr.message ?? "").toLowerCase();
+        if (msg.includes("restaurants_cnpj_key") || msg.includes("(cnpj)")) {
+          return new Response(
+            JSON.stringify({ code: "CNPJ_ALREADY_EXISTS", message: "Já existe restaurante com este CNPJ" }),
+            { status: 409, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
+          );
+        }
+        if (msg.includes("restaurants_code_key") || msg.includes("(code)")) {
+          return new Response(
+            JSON.stringify({ code: "CODE_ALREADY_EXISTS", message: "Já existe restaurante com este código" }),
+            { status: 409, headers: { ...corsHeaders(origin), "Content-Type": "application/json" } }
+          );
+        }
+      }
       console.error("Erro inserindo restaurante:", restErr);
       throw restErr;
     }
@@ -154,11 +270,13 @@ const handler = async (req: Request): Promise<Response> => {
 
   } catch (err: any) {
     console.error("cf_create_restaurant ERROR:", err);
+    const status = err.status ?? 500;
+    const code   = err.code   ?? "INTERNAL_ERROR";
     return new Response(
-      JSON.stringify({ code: "INTERNAL_ERROR", message: err.message }),
+      JSON.stringify({ code, message: err.message ?? "Erro interno" }),
       {
-        status: 500,
-        headers: { ...corsHeaders(req.headers.get("origin")), "Content-Type": "application/json" },
+        status,
+        headers: { ...corsHeaders(req.headers.get("origin") ?? undefined), "Content-Type": "application/json" },
       }
     );
   }
