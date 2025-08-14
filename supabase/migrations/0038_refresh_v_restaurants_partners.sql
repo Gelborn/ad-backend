@@ -1,29 +1,35 @@
--- 0038_refresh_v_restaurants_partners.sql
--- Re-expand r.* so new columns (cnpj, code) appear in the view.
+-- 0038_refresh_v_restaurants_partners_drop_recreate.sql
+-- Recreate the view so r.* includes the new columns (cnpj, code).
 
-create or replace view v_restaurants_partners as
-select
+BEGIN;
+
+DROP VIEW IF EXISTS public.v_restaurants_partners;
+
+CREATE VIEW public.v_restaurants_partners AS
+SELECT
   r.*,
 
-  /* JSON array: [{id,name}, …]  */
+  /* JSON array: [{id,name}, …] — favorita primeiro */
   (
-    select jsonb_agg(
+    SELECT jsonb_agg(
              jsonb_build_object('id', o.id, 'name', o.name)
-             order by p.is_favorite desc
+             ORDER BY p.is_favorite DESC
            )
-    from partnerships p
-    join osc o on o.id = p.osc_id
-    where p.restaurant_id = r.id
-  ) as partners_list,
+    FROM partnerships p
+    JOIN osc o ON o.id = p.osc_id
+    WHERE p.restaurant_id = r.id
+  ) AS partners_list,
 
   /* objeto da favorita ou NULL */
   (
-    select jsonb_build_object('id', o.id, 'name', o.name)
-    from partnerships p
-    join osc o on o.id = p.osc_id
-    where p.restaurant_id = r.id
-      and p.is_favorite
-    limit 1
-  ) as favorite_osc
+    SELECT jsonb_build_object('id', o.id, 'name', o.name)
+    FROM partnerships p
+    JOIN osc o ON o.id = p.osc_id
+    WHERE p.restaurant_id = r.id
+      AND p.is_favorite
+    LIMIT 1
+  ) AS favorite_osc
 
-from public.restaurants r;
+FROM public.restaurants r;
+
+COMMIT;
