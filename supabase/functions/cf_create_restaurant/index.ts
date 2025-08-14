@@ -80,6 +80,9 @@ const handler = async (req: Request): Promise<Response> => {
       code: codeRaw,
     } = body;
 
+    // log object
+    console.log("body", body);
+
     const emailLc = (emailOwner as string).trim().toLowerCase();
 
     if (!validateCep(cep)) {
