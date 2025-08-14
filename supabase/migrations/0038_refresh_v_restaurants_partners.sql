@@ -32,4 +32,7 @@ SELECT
 
 FROM public.restaurants r;
 
+-- Optional: re-grant if your roles rely on direct view grants
+-- GRANT SELECT ON public.v_restaurants_partners TO anon, authenticated;
+
 COMMIT;
